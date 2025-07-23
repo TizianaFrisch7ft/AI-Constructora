@@ -1,4 +1,4 @@
-// src/services/mongoQueryService.ts
+// src/services/mongoShared.ts
 import mongoose from "mongoose";
 import Vendor from "../models/Vendor";
 import Project from "../models/Project";
@@ -8,15 +8,6 @@ import VendorEval from "../models/VendorEval";
 import VendorEvalLine from "../models/VendorEvalLine";
 import PreselectVendor from "../models/PreselectVendor";
 import ProjectVendor from "../models/ProjectVendor";
-
-export type QueryInput = {
-  collection: string;
-  filter?: Record<string, any>;
-  projection?: Record<string, 0 | 1>;
-  limit?: number;
-  skip?: number;
-  sort?: Record<string, 1 | -1>;
-};
 
 export const models: Record<string, mongoose.Model<any>> = {
   vendors: Vendor,
@@ -29,7 +20,6 @@ export const models: Record<string, mongoose.Model<any>> = {
   projectvendors: ProjectVendor,
 };
 
-// Campos válidos por colección
 export const FIELDS: Record<string, string[]> = {
   vendors: ["id","name","reference_name","class","rubro","legal_type","legal_id","main_mail","in_contact_name","mobile","status","type","score_avg"],
   projects: ["id","name"],
@@ -41,7 +31,6 @@ export const FIELDS: Record<string, string[]> = {
   projectvendors: ["project_id","vendor_id","score","status"],
 };
 
-// Alias simples
 const FIELD_ALIAS: Record<string, Record<string, string>> = {
   vendors: {
     category: "rubro",
@@ -49,13 +38,16 @@ const FIELD_ALIAS: Record<string, Record<string, string>> = {
     score: "score_avg",
     tipo: "class",
     estado: "status",
+    vendorid: "id",
+    vendor_id: "id",
+    vendorId: "id",     // por si llega con camelCase
   },
+  // ...
 };
 
-export const normalize = (s: string) =>
-  s.trim().toLowerCase().replace(/[\s_-]+/g, "");
+export const normalize = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, "");
 
-const applyAliases = (col: string, filter: Record<string, any>) => {
+export const applyAliases = (col: string, filter: Record<string, any>) => {
   const aliases = FIELD_ALIAS[col] || {};
   const out: any = {};
   for (const k of Object.keys(filter || {})) {
@@ -65,8 +57,8 @@ const applyAliases = (col: string, filter: Record<string, any>) => {
   return out;
 };
 
-const stripUnknownFields = (col: string, obj: any): any => {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+export const stripUnknownFields = (col: string, obj: any): any => {
+  if (!obj || typeof obj !== "object") return obj;
   const allowed = new Set(FIELDS[col] || []);
   const clean: any = {};
   for (const key of Object.keys(obj)) {
@@ -74,38 +66,10 @@ const stripUnknownFields = (col: string, obj: any): any => {
       clean[key] = stripUnknownFields(col, obj[key]);
     } else if (allowed.has(key)) {
       const val = obj[key];
-      clean[key] = stripUnknownFields(col, val);
+      clean[key] = val && typeof val === "object" && !Array.isArray(val)
+        ? stripUnknownFields(col, val)
+        : val;
     }
   }
   return clean;
-};
-
-const sanitizeProjection = (col: string, proj?: Record<string, 0 | 1>) => {
-  if (!proj) return undefined;
-  const allowed = new Set(FIELDS[col] || []);
-  const out: any = {};
-  for (const k of Object.keys(proj)) {
-    if (allowed.has(k)) out[k] = proj[k];
-  }
-  return Object.keys(out).length ? out : undefined;
-};
-
-export const executeDynamicQuery = async (query: QueryInput) => {
-  if (!query?.collection) throw new Error("Consulta inválida: falta 'collection'");
-  const key = normalize(query.collection);
-  const Model = models[key];
-  if (!Model) throw new Error("No se encontró la colección: " + query.collection);
-
-  let filter = query.filter ?? {};
-  filter = applyAliases(key, filter);
-  filter = stripUnknownFields(key, filter);
-
-  const projection = sanitizeProjection(key, query.projection);
-  const limit = Number.isInteger(query.limit) ? query.limit! : 200;
-  const skip = Number.isInteger(query.skip) ? query.skip! : 0;
-  const sort = query.sort ?? undefined;
-
-  // console.log("🔎 find:", { key, filter, projection, sort, limit, skip });
-
-  return Model.find(filter, projection).sort(sort).skip(skip).limit(limit).lean();
 };

@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
 import agentRoutes from "./routes/agentRoutes";
+import writeRoutes from "./routes/writeRoutes";
 
 import "./models/Project";
 import "./models/Vendor";
@@ -30,6 +31,7 @@ mongoose
   });
 
 app.use("/ask", agentRoutes);
+app.use("/write", writeRoutes);
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend levantado en http://localhost:${PORT}`);
