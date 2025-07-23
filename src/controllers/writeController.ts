@@ -1,11 +1,9 @@
-// src/controllers/writeController.ts
 import { Request, Response } from "express";
 import { getMongoWriteOp, WriteOp } from "../services/openaiService";
 import { executeDynamicWrite } from "../services/mongoWriteService";
 
-const NEEDS_FILTER: Set<WriteOp["action"]> = new Set([
-  "updateOne","updateMany","deleteOne","deleteMany"
-]);
+const NEEDS_FILTER = new Set(["updateOne", "updateMany", "deleteOne", "deleteMany"]);
+const hasFilter = (op: WriteOp): op is Extract<WriteOp, { filter: any }> => "filter" in op;
 
 export const handleWrite = async (req: Request, res: Response) => {
   const { instruction, confirm = false } = req.body ?? {};
@@ -22,11 +20,8 @@ export const handleWrite = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Operación incompleta", plan: op });
     }
 
-    // 👇 Narrowing para las acciones que requieren filtro
-    if (NEEDS_FILTER.has(op.action)) {
-      if (!("filter" in op) || !op.filter || Object.keys(op.filter).length === 0) {
-        return res.status(400).json({ error: "update/delete requieren 'filter' no vacío", plan: op });
-      }
+    if (NEEDS_FILTER.has(op.action) && (!hasFilter(op) || !op.filter || Object.keys(op.filter).length === 0)) {
+      return res.status(400).json({ error: "update/delete requieren 'filter' no vacío", plan: op });
     }
 
     if (!confirm) {
@@ -37,9 +32,9 @@ export const handleWrite = async (req: Request, res: Response) => {
     }
 
     const result = await executeDynamicWrite(instruction, op);
-    return res.json({ ok: true, plan: op, result });
+    res.json({ ok: true, plan: op, result });
   } catch (err: any) {
     console.error("❌ Error write:", err);
-    return res.status(500).json({ error: err.message || "Error interno" });
+    res.status(500).json({ error: err.message || "Error interno" });
   }
 };

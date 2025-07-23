@@ -1,13 +1,13 @@
 // src/services/openaiService.ts
 import OpenAI from "openai";
 import dotenv from "dotenv";
-
 dotenv.config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 /* ---------- Tipos ---------- */
-export type ReadQuery = {
+export type FindStep = {
+  mode: "find";
   collection: string;
   filter?: Record<string, any>;
   projection?: Record<string, 0 | 1>;
@@ -15,6 +15,17 @@ export type ReadQuery = {
   sort?: Record<string, 1 | -1>;
   skip?: number;
 };
+
+export type AggregateStep = {
+  mode: "aggregate";
+  collection: string;
+  pipeline: any[];
+};
+
+export type ReadPlan =
+  | FindStep
+  | AggregateStep
+  | { steps: Array<FindStep | AggregateStep> };
 
 export type WriteOp =
   | {
@@ -39,22 +50,25 @@ export type WriteOp =
   | { action: "none" };
 
 /* ---------- Helpers ---------- */
+const cleanLLMText = (txt: string) =>
+  txt
+    .replace(/```json|```/g, "")
+    .replace(/ISODate\(\"([^"]+)\"\)/g, '"$1"')
+    .replace(/\$number(Int|Long)\(\"(\d+)\"\)/g, "$2");
+
 const safeJSON = <T>(txt: string): T => {
+  const cleaned = cleanLLMText(txt.trim());
   try {
-    return JSON.parse(txt) as T;
+    return JSON.parse(cleaned) as T;
   } catch {
-    // intenta sacar el primer bloque JSON válido
-    const match = txt.match(/\{[\s\S]*\}$/m);
+    const match = cleaned.match(/\{[\s\S]*\}$/m);
     if (match) return JSON.parse(match[0]) as T;
     throw new Error("La respuesta de OpenAI no fue un JSON válido.");
   }
 };
 
 /* ---------- Prompts ---------- */
-const READ_PROMPT = (question: string) => `
-Sos un generador de consultas para MongoDB.
-Tu salida debe ser **EXCLUSIVAMENTE** un JSON válido (sin backticks ni texto extra).
-
+const COLLECTION_LIST = `
 Colecciones permitidas (usa el nombre EXACTO):
 - vendors
 - projects
@@ -64,16 +78,57 @@ Colecciones permitidas (usa el nombre EXACTO):
 - vendorevallines
 - preselectvendors
 - projectvendors
+- rfqs
+- consumablereqs
+- deliveryissues
+`;
 
+const FIELDS_DESC = `
 Campos disponibles por colección:
 vendors: ["id","name","reference_name","class","rubro","legal_type","legal_id","main_mail","in_contact_name","mobile","status","type","score_avg"]
 projects: ["id","name"]
-quotes: ["id","project_id","date"]
+quotes: ["id","project_id","vendor_id","date"]
 quotelines: ["id","line_no","product_id","reference","price","qty","delivery_date","project_id"]
 vendorevals: ["eval_id","eval_name","vendor_id","start_date","due_date","type","attach_id"]
 vendorevallines: ["eval_id","line_no","name","value","check","attach_id"]
 preselectvendors: ["project_id","vendor_id","status"]
 projectvendors: ["project_id","vendor_id","score","status"]
+rfqs: ["rfq_id","project_id","vendor_id","products","sent_at","responded_at","status"]
+consumablereqs: ["req_id","project_id","pm_id","pm_name","product_id","qty","due_date","status","created_at"]
+deliveryissues: ["issue_id","vendor_id","project_id","type","description","occurred_at","resolved"]
+`;
+
+const READ_PROMPT = (question: string) => `
+Sos un generador de consultas para MongoDB.
+Tu salida debe ser **EXCLUSIVAMENTE** un JSON válido (sin backticks ni texto extra).
+
+Podés devolver:
+1) Find simple
+{
+  "mode": "find",
+  "collection": "...",
+  "filter": {...},
+  "projection": {...},
+  "limit": 100,
+  "sort": {"campo": 1},
+  "skip": 0
+}
+
+2) Aggregate
+{
+  "mode": "aggregate",
+  "collection": "...",
+  "pipeline": [ { "$match": {...} }, { "$group": {...} }, ... ]
+}
+
+3) Secuencia de pasos
+{
+  "steps": [ {<find|aggregate>}, {<find|aggregate>} ]
+}
+
+${COLLECTION_LIST}
+
+${FIELDS_DESC}
 
 Sinónimos → campo correcto:
 categoría/category -> rubro
@@ -83,22 +138,47 @@ promedio/score -> score_avg
 ítems de cotización -> quotelines
 evaluación de proveedor -> vendorevals
 detalle de evaluación -> vendorevallines
-
-### FORMATO RESPUESTA
-{
-  "collection": "<colección>",
-  "filter": { ... },          // {} si no hay filtros
-  "projection": { ... },      // opcional
-  "limit": 100,               // opcional
-  "sort": { "campo": 1 },     // opcional
-  "skip": 0                   // opcional
-}
+RFQ -> rfqs
+requerimiento de consumible -> consumablereqs
+problema de entrega / calidad -> deliveryissues
 
 Reglas:
-- Operadores Mongo válidos ($gte, $lte, $in, $regex, etc.).
-- Fechas ISO "YYYY-MM-DD".
-- No inventes colecciones ni campos.
-- Nada fuera del JSON.
+- Solo esas colecciones y campos.
+- Operadores Mongo válidos: $gte, $lte, $in, $regex, $eq, $ne, $and, $or, etc.
+- Fechas como string "YYYY-MM-DD".
+- Si necesitás totales/mínimos/etc., usá aggregate con $match,$project,$group,$sort,$limit,$skip,$unwind,$lookup.
+- NO agregues nada fuera del JSON.
+
+**CASO ESPECIAL - “precios más bajos por producto y consolidar por proveedor y por obra”**
+Usá este patrón (ajustá filtros si hace falta):
+{
+  "mode": "aggregate",
+  "collection": "quotelines",
+  "pipeline": [
+    { "$lookup": { "from": "quotes", "localField": "id", "foreignField": "id", "as": "q" } },
+    { "$unwind": "$q" },
+    { "$project": {
+        "project_id": "$q.project_id",
+        "vendor_id": "$q.vendor_id",
+        "product_id": 1,
+        "reference": 1,
+        "price": 1,
+        "qty": 1
+    }},
+    { "$sort": { "project_id": 1, "product_id": 1, "price": 1 } },
+    { "$group": {
+        "_id": { "project_id": "$project_id", "product_id": "$product_id" },
+        "line": { "$first": "$$ROOT" }
+    }},
+    { "$group": {
+        "_id": { "project_id": "$line.project_id", "vendor_id": "$line.vendor_id" },
+        "items": {
+          "$push": { "product_id": "$line.product_id", "reference": "$line.reference", "qty": "$line.qty", "price": "$line.price" }
+        }
+    }},
+    { "$sort": { "_id.project_id": 1, "_id.vendor_id": 1 } }
+  ]
+}
 
 Pregunta del usuario:
 "${question}"
@@ -110,8 +190,7 @@ Debés devolver **solo** un JSON válido.
 
 Acciones permitidas: "insertOne","insertMany","updateOne","updateMany","deleteOne","deleteMany"
 
-Colecciones permitidas:
-vendors, projects, quotes, quotelines, vendorevals, vendorevallines, preselectvendors, projectvendors
+${COLLECTION_LIST}
 
 Salida obligatoria:
 {
@@ -124,40 +203,44 @@ Salida obligatoria:
 }
 
 Reglas:
-- NO inventes colecciones ni campos.
-- insert* -> usa "data".
-- update* -> usa "update" (con $set, $inc, etc).
+- NO inventes colecciones ni campos. Usá los campos válidos informados.
+- insert* -> "data".
+- update* -> "update" ($set, $inc, etc).
 - delete* -> solo "filter".
-- Fechas ISO "YYYY-MM-DD".
-- Si no hay intención clara de escribir, responde {"action":"none"}.
-
-Campos por colección (mismos que arriba).
+- Fechas "YYYY-MM-DD".
+- Si no hay intención clara de escribir: {"action":"none"}.
 
 Pregunta del usuario:
 "${question}"
 `;
 
 const NATURAL_PROMPT = (question: string, data: any) => `
-Estás respondiendo como un agente técnico para una empresa.
+Estás respondiendo como un agente técnico.
 
-Pregunta del usuario:
-"${question}"
+IMPORTANTE:
+- Si hay datos, NO digas que no hay resultados.
+- Usa exactamente lo que hay en "data".
+- Agrupa y presenta claro (títulos, listas, tablas).
+- Si no hay datos, decilo.
 
-Resultados de la base de datos:
+Pregunta:
+${question}
+
+Datos (JSON):
 ${JSON.stringify(data)}
 
-Redactá una respuesta natural, clara y útil en español. Si no hay datos, indicá que no se encontraron resultados.
+Redactá en español usando **Markdown limpio**.
 `;
 
 /* ---------- Funciones ---------- */
-export const getMongoQuery = async (question: string): Promise<ReadQuery> => {
+export const getMongoQuery = async (question: string): Promise<ReadPlan> => {
   const resp = await openai.chat.completions.create({
     model: "gpt-3.5-turbo",
     temperature: 0,
     top_p: 0,
     messages: [{ role: "user", content: READ_PROMPT(question) }],
   });
-  return safeJSON<ReadQuery>(resp.choices[0].message.content || "");
+  return safeJSON<ReadPlan>(resp.choices[0].message.content || "");
 };
 
 export const getMongoWriteOp = async (question: string): Promise<WriteOp> => {

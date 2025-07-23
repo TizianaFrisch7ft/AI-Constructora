@@ -1,11 +1,6 @@
 // src/services/mongoWriteService.ts
 import AuditLog from "../models/AuditLog";
-import {
-  normalize,
-  applyAliases,
-  stripUnknownFields,
-  models,
-} from "./mongoShared";
+import { normalize, applyAliases, stripUnknownFields, models } from "./mongoShared";
 
 type WriteInput = {
   action: "insertOne" | "insertMany" | "updateOne" | "updateMany" | "deleteOne" | "deleteMany";
@@ -30,14 +25,8 @@ export const executeDynamicWrite = async (question: string, op: WriteInput) => {
   const isUpdate = op.action.startsWith("update");
   const isDelete = op.action.startsWith("delete");
 
-  // --- Normalizo y limpio ---
   let filter = applyAliases(key, op.filter ?? {});
   filter = stripUnknownFields(key, filter);
-
-  // ❗ Evitar updates/deletes sin filtro
-  if ((isUpdate || isDelete) && Object.keys(filter).length === 0) {
-    throw new Error("Filtro vacío o inválido para update/delete");
-  }
 
   let update = op.update ?? {};
   if (isUpdate) update = stripUnknownFields(key, update);
@@ -53,64 +42,51 @@ export const executeDynamicWrite = async (question: string, op: WriteInput) => {
 
   const options = op.options ?? {};
 
-  // --- Before snapshot (solo para update/delete) ---
-  let before: any = null;
-  if (isUpdate || isDelete) {
-    before = await Model.find(filter).lean();
+  let result: any;
+  if (isInsert) {
+    result = op.action === "insertOne" ? await Model.create(data) : await Model.insertMany(data);
+  } else if (isUpdate) {
+    const before = await Model.find(filter).lean();
+    const raw = op.action === "updateOne"
+      ? await Model.updateOne(filter, update, options)
+      : await Model.updateMany(filter, update, options);
+    const after = await Model.find(filter).lean();
+    result = {
+      ok: true,
+      action: op.action,
+      collection: key,
+      affected: raw.modifiedCount ?? raw.matchedCount ?? 0,
+      before,
+      after,
+      raw,
+    };
+  } else if (isDelete) {
+    const before = await Model.find(filter).lean();
+    const raw = op.action === "deleteOne"
+      ? await Model.deleteOne(filter)
+      : await Model.deleteMany(filter);
+    result = {
+      ok: true,
+      action: op.action,
+      collection: key,
+      affected: raw.deletedCount ?? 0,
+      before,
+      after: null,
+      raw,
+    };
+  } else {
+    throw new Error("Acción no soportada: " + op.action);
   }
 
-  // --- Ejecutar ---
-  let rawResult: any;
-  let after: any = null;
-
-  switch (op.action) {
-    case "insertOne":
-      rawResult = await Model.create(data);
-      after = rawResult.toObject ? rawResult.toObject() : rawResult;
-      break;
-    case "insertMany":
-      rawResult = await Model.insertMany(data);
-      after = rawResult.map((d: any) => (d.toObject ? d.toObject() : d));
-      break;
-    case "updateOne":
-      rawResult = await Model.updateOne(filter, update, options);
-      after = await Model.find(filter).lean();
-      break;
-    case "updateMany":
-      rawResult = await Model.updateMany(filter, update, options);
-      after = await Model.find(filter).lean();
-      break;
-    case "deleteOne":
-      rawResult = await Model.deleteOne(filter);
-      break;
-    case "deleteMany":
-      rawResult = await Model.deleteMany(filter);
-      break;
-    default:
-      throw new Error("Acción no soportada: " + op.action);
-  }
-
-  // --- Auditoría ---
   await AuditLog.create({
     action: op.action,
     coll: key,
     filter,
     payload: isInsert ? data : update,
     options,
-    result: rawResult,
-    before,
-    after,
+    result,
     question,
-    created_at: new Date(),
   });
 
-  return {
-    ok: true,
-    action: op.action,
-    collection: key,
-    affected: isInsert ? (Array.isArray(after) ? after.length : 1) : rawResult?.modifiedCount ?? rawResult?.deletedCount ?? 0,
-    before,
-    after,
-    raw: rawResult,
-  };
+  return result;
 };
