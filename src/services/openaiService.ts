@@ -190,29 +190,57 @@ Debés devolver **solo** un JSON válido.
 
 Acciones permitidas: "insertOne","insertMany","updateOne","updateMany","deleteOne","deleteMany"
 
-${COLLECTION_LIST}
+Colecciones permitidas (usa el nombre EXACTO):
+- vendors (el campo 'id' es REQUERIDO para insert)
+- projects (el campo 'id' es REQUERIDO para insert)
+- quotes (el campo 'id' es REQUERIDO para insert)
+- quotelines (el campo 'id' es REQUERIDO para insert)
+- vendorevals (el campo 'eval_id' es REQUERIDO para insert)
+- vendorevallines (el campo 'eval_id' es REQUERIDO para insert)
+- preselectvendors (el campo 'project_id' y 'vendor_id' son REQUERIDOS para insert)
+- projectvendors (el campo 'project_id' y 'vendor_id' son REQUERIDOS para insert)
+- rfqs (el campo 'rfq_id' es REQUERIDO para insert)
+- consumablereqs (el campo 'req_id' es REQUERIDO para insert)
+- deliveryissues (el campo 'issue_id' es REQUERIDO para insert)
 
-Salida obligatoria:
-{
-  "action": "<acción>",
-  "collection": "<colección>",
-  "filter": { ... },          // requerido para update/delete
-  "update": { ... },          // requerido para update*
-  "data": { ... } | [ ... ],  // requerido para insert*
-  "options": { ... }          // opcional
-}
+Campos disponibles por colección:
+vendors: ["id" (obligatorio en insert), "name", "reference_name", "class", "rubro", "legal_type", "legal_id", "main_mail", "in_contact_name", "mobile", "status", "type", "score_avg"]
+projects: ["id" (obligatorio en insert), "name"]
+quotes: ["id" (obligatorio en insert), "project_id", "vendor_id", "date"]
+quotelines: ["id" (obligatorio en insert), "line_no", "product_id", "reference", "price", "qty", "delivery_date", "project_id"]
+vendorevals: ["eval_id" (obligatorio en insert), "eval_name", "vendor_id", "start_date", "due_date", "type", "attach_id"]
+vendorevallines: ["eval_id" (obligatorio en insert), "line_no", "name", "value", "check", "attach_id"]
+preselectvendors: ["project_id" (obligatorio en insert), "vendor_id" (obligatorio en insert), "status"]
+projectvendors: ["project_id" (obligatorio en insert), "vendor_id" (obligatorio en insert), "score", "status"]
+rfqs: ["rfq_id" (obligatorio en insert), "project_id", "vendor_id", "products", "sent_at", "responded_at", "status"]
+consumablereqs: ["req_id" (obligatorio en insert), "project_id", "pm_id", "pm_name", "product_id", "qty", "due_date", "status", "created_at"]
+deliveryissues: ["issue_id" (obligatorio en insert), "vendor_id", "project_id", "type", "description", "occurred_at", "resolved"]
 
 Reglas:
 - NO inventes colecciones ni campos. Usá los campos válidos informados.
-- insert* -> "data".
-- update* -> "update" ($set, $inc, etc).
-- delete* -> solo "filter".
-- Fechas "YYYY-MM-DD".
-- Si no hay intención clara de escribir: {"action":"none"}.
+- Para insertOne/insertMany debes incluir todos los **campos obligatorios** (id, eval_id, rfq_id, req_id, etc.) según la colección.
+- insert* -> usa "data".
+- update* -> usa "update" (con $set, $inc, etc) y "filter" no vacío.
+- delete* -> solo "filter" no vacío.
+- Fechas en formato ISO "YYYY-MM-DD".
+- Si no hay intención clara de escribir, responde {"action":"none"}.
+
+Ejemplo válido para vendors:
+{
+  "action": "insertOne",
+  "collection": "vendors",
+  "data": {
+    "id": "V1234",           // OBLIGATORIO
+    "name": "Proveedor XYZ",
+    "class": "Material",
+    "rubro": "Materiales de Construcción"
+  }
+}
 
 Pregunta del usuario:
 "${question}"
 `;
+
 
 const NATURAL_PROMPT = (question: string, data: any) => `
 Estás respondiendo como un agente técnico.
