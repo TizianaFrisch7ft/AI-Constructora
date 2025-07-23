@@ -1,0 +1,14 @@
+# Node / TS
+node_modules/
+dist/
+coverage/
+*.log
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Misc
+.DS_Store
+*.tsbuildinfo
