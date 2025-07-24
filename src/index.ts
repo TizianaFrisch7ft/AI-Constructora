@@ -5,6 +5,7 @@ import cors from "cors";
 import agentRoutes from "./routes/agentRoutes";
 import writeRoutes from "./routes/writeRoutes";
 
+// importa tus modelos para inicializarlos
 import "./models/Project";
 import "./models/Vendor";
 import "./models/VendorEval";
@@ -15,13 +16,23 @@ import "./models/Quote";
 import "./models/QuoteLine";
 
 dotenv.config();
+
 const app = express();
-app.use(cors());
+
+// CORS apuntando a tu front en Vercel
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "*",
+  })
+);
 app.use(express.json());
 
-const PORT = process.env.PORT || 4000;
-const MONGO_URI = process.env.MONGO_URI || "";
+// Health‑check
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 
+const MONGO_URI = process.env.MONGO_URI!;
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("✅ Conectado a MongoDB"))
@@ -30,9 +41,11 @@ mongoose
     process.exit(1);
   });
 
+// tus rutas
 app.use("/ask", agentRoutes);
 app.use("/write", writeRoutes);
 
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-  console.log(`🚀 Backend levantado en http://localhost:${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
