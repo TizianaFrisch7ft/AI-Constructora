@@ -2,8 +2,9 @@
 import { Request, Response } from "express";
 import { getMongoQuery, getNaturalAnswer } from "../services/openaiService";
 import { executeDynamicQuery } from "../services/mongoReadService";
+import { alignTableRows } from "../utils/tableFormatter";
 
-/** Chequea si hay algún dato real dentro del resultado (arrays anidados, objetos, etc.) */
+/** Verifica si hay datos reales en la respuesta */
 const hasData = (d: any): boolean => {
   if (Array.isArray(d)) return d.some(hasData);
   if (d && typeof d === "object") return Object.keys(d).length > 0;
@@ -12,33 +13,47 @@ const hasData = (d: any): boolean => {
 
 export const handleAsk = async (req: Request, res: Response) => {
   const { question } = req.body;
-  if (!question) return res.status(400).json({ error: "Falta la pregunta" });
+
+  // Validación estricta de input
+  if (!question || typeof question !== "string" || question.trim() === "") {
+    return res.status(400).json({ error: "Falta la pregunta válida." });
+  }
 
   try {
     const plan = await getMongoQuery(question.trim());
-    console.log("👉 Plan generado:", JSON.stringify(plan, null, 2));
+    console.log("🧠 Plan generado:", JSON.stringify(plan, null, 2));
 
     const data = await executeDynamicQuery(plan);
-    console.log("👉 Resultados:", JSON.stringify(data, null, 2));
+    const dataSummary = Array.isArray(data) ? `${data.length} resultados` : typeof data;
+    console.log("📦 Resultados:", dataSummary);
 
     let answer: string;
+    const validData = hasData(data);
 
-    if (!hasData(data)) {
-      answer = "No se encontraron resultados para esa consulta.";
+    if (!validData) {
+      answer = "No se encontraron resultados para esa consulta. Desea ayuda con algo más?";
     } else {
       answer = await getNaturalAnswer(question, data);
 
-      // Por si el LLM insiste con “no se encontraron” teniendo data
-      if (/no se encontraron/i.test(answer) && hasData(data)) {
+      // Corrección si el LLM responde erróneamente “no se encontró”
+      if (/no se encontraron/i.test(answer)) {
         answer =
           "Se encontraron estos resultados y los presento a continuación:\n" +
           JSON.stringify(data, null, 2);
       }
     }
 
-    res.json({ answer, plan, data });
+    const table = Array.isArray(data) && data.length > 0 ? alignTableRows(data) : null;
+
+    return res.json({
+      success: true,
+      answer,
+      plan,
+      data,
+      table,
+    });
   } catch (err: any) {
-    console.error("❌ Error /ask:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Error en /ask:", err);
+    return res.status(500).json({ error: err.message || "Error interno del servidor." });
   }
 };

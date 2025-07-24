@@ -36,5 +36,3 @@ app.use("/write", writeRoutes);
 app.listen(PORT, () => {
   console.log(`🚀 Backend levantado en http://localhost:${PORT}`);
 });
-
-
