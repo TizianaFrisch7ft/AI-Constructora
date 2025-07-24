@@ -127,8 +127,8 @@ Podés devolver:
 }
 
 ${COLLECTION_LIST}
-
 ${FIELDS_DESC}
+
 
 Sinónimos → campo correcto:
 categoría/category -> rubro
@@ -141,6 +141,10 @@ detalle de evaluación -> vendorevallines
 RFQ -> rfqs
 requerimiento de consumible -> consumablereqs
 problema de entrega / calidad -> deliveryissues
+entrega demorada / retraso -> deliveryissues
+problema de calidad / defecto -> deliveryissues
+incumplimiento -> deliveryissues
+
 
 Reglas:
 - Solo esas colecciones y campos.
@@ -185,79 +189,80 @@ Pregunta del usuario:
 `;
 
 const WRITE_PROMPT = (question: string) => `
-Sos un generador de operaciones de ESCRITURA MongoDB.
-Debés devolver **solo** un JSON válido.
+Sos un generador de planes de escritura para MongoDB.
+Tu única tarea es devolver un JSON válido con una instrucción de escritura.
 
-Acciones permitidas: "insertOne","insertMany","updateOne","updateMany","deleteOne","deleteMany"
+⚠️ NO uses "mode", "find", "aggregate", ni estructuras de lectura.
 
-Colecciones permitidas (usa el nombre EXACTO):
-- vendors (el campo 'id' es REQUERIDO para insert)
-- projects (el campo 'id' es REQUERIDO para insert)
-- quotes (el campo 'id' es REQUERIDO para insert)
-- quotelines (el campo 'id' es REQUERIDO para insert)
-- vendorevals (el campo 'eval_id' es REQUERIDO para insert)
-- vendorevallines (el campo 'eval_id' es REQUERIDO para insert)
-- preselectvendors (el campo 'project_id' y 'vendor_id' son REQUERIDOS para insert)
-- projectvendors (el campo 'project_id' y 'vendor_id' son REQUERIDOS para insert)
-- rfqs (el campo 'rfq_id' es REQUERIDO para insert)
-- consumablereqs (el campo 'req_id' es REQUERIDO para insert)
-- deliveryissues (el campo 'issue_id' es REQUERIDO para insert)
+Podés devolver uno de estos formatos:
 
-Campos disponibles por colección:
-vendors: ["id" (obligatorio en insert), "name", "reference_name", "class", "rubro", "legal_type", "legal_id", "main_mail", "in_contact_name", "mobile", "status", "type", "score_avg"]
-projects: ["id" (obligatorio en insert), "name"]
-quotes: ["id" (obligatorio en insert), "project_id", "vendor_id", "date"]
-quotelines: ["id" (obligatorio en insert), "line_no", "product_id", "reference", "price", "qty", "delivery_date", "project_id"]
-vendorevals: ["eval_id" (obligatorio en insert), "eval_name", "vendor_id", "start_date", "due_date", "type", "attach_id"]
-vendorevallines: ["eval_id" (obligatorio en insert), "line_no", "name", "value", "check", "attach_id"]
-preselectvendors: ["project_id" (obligatorio en insert), "vendor_id" (obligatorio en insert), "status"]
-projectvendors: ["project_id" (obligatorio en insert), "vendor_id" (obligatorio en insert), "score", "status"]
-rfqs: ["rfq_id" (obligatorio en insert), "project_id", "vendor_id", "products", "sent_at", "responded_at", "status"]
-consumablereqs: ["req_id" (obligatorio en insert), "project_id", "pm_id", "pm_name", "product_id", "qty", "due_date", "status", "created_at"]
-deliveryissues: ["issue_id" (obligatorio en insert), "vendor_id", "project_id", "type", "description", "occurred_at", "resolved"]
-
-Reglas:
-- NO inventes colecciones ni campos. Usá los campos válidos informados.
-- Para insertOne/insertMany debes incluir todos los **campos obligatorios** (id, eval_id, rfq_id, req_id, etc.) según la colección.
-- insert* -> usa "data".
-- update* -> usa "update" (con $set, $inc, etc) y "filter" no vacío.
-- delete* -> solo "filter" no vacío.
-- Fechas en formato ISO "YYYY-MM-DD".
-- Si no hay intención clara de escribir, responde {"action":"none"}.
-
-Ejemplo válido para vendors:
+1) Insertar documento:
 {
   "action": "insertOne",
   "collection": "vendors",
-  "data": {
-    "id": "V1234",           // OBLIGATORIO
-    "name": "Proveedor XYZ",
-    "class": "Material",
-    "rubro": "Materiales de Construcción"
-  }
+  "data": { "campo1": "valor", "campo2": "valor" }
 }
 
-Pregunta del usuario:
+2) Insertar muchos:
+{
+  "action": "insertMany",
+  "collection": "vendors",
+  "data": [{...}, {...}]
+}
+
+3) Actualizar uno o varios:
+{
+  "action": "updateOne",
+  "collection": "vendors",
+  "filter": { "status": "inactivo" },
+  "update": { "$set": { "status": "activo" } }
+}
+
+4) Eliminar uno o varios:
+{
+  "action": "deleteMany",
+  "collection": "vendors",
+  "filter": { "status": "inactivo" }
+}
+
+Si no hay acción a realizar, devolvé:
+{ "action": "none" }
+
+Reglas:
+- Solo usá las colecciones y campos listados abajo.
+- No devuelvas texto, ni explicaciones, solo el JSON plano.
+- NO uses "mode", "find", "aggregate", ni arrays de steps.
+
+${COLLECTION_LIST}
+${FIELDS_DESC}
+
+Consulta del usuario:
 "${question}"
 `;
 
 
+// src/services/openaiService.ts
 const NATURAL_PROMPT = (question: string, data: any) => `
-Estás respondiendo como un agente técnico.
+Eres un asistente que responde consultas sobre nuestra base de datos de construcción.
+Tienes estos objetivos:
 
-IMPORTANTE:
-- Si hay datos, NO digas que no hay resultados.
-- Usa exactamente lo que hay en "data".
-- Agrupa y presenta claro (títulos, listas, tablas).
-- Si no hay datos, decilo.
+1. Arranca con una frase natural y variable (p.ej. “Claro, esto es lo que encontré:”, “Aquí tienes los datos:”).
+2. Presenta los datos de \`data\`:
+   - Si vienen objetos simples, haz una lista de viñetas.
+   - Si vienen varios campos, genera una tabla Markdown.
+3. Al final añade una sección **Entidades detectadas:** con badges en línea \`[tipo: valor]\`.
+4. Si pedimos cálculos (sumas, promedios, comparaciones), hazlos tú mismo.
+5. Si no hay datos, di “Lo siento, no encontré resultados para esa consulta.”
 
-Pregunta:
+**Consulta del usuario:**
+\`\`\`
 ${question}
+\`\`\`
 
-Datos (JSON):
-${JSON.stringify(data)}
-
-Redactá en español usando **Markdown limpio**.
+**Datos JSON:**
+\`\`\`json
+${JSON.stringify(data, null, 2)}
+\`\`\`
 `;
 
 /* ---------- Funciones ---------- */
@@ -283,9 +288,10 @@ export const getMongoWriteOp = async (question: string): Promise<WriteOp> => {
 
 export const getNaturalAnswer = async (question: string, data: any): Promise<string> => {
   const resp = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo",
-    temperature: 0.2,
-    messages: [{ role: "user", content: NATURAL_PROMPT(question, data) }],
-  });
+  model: "gpt-4o-mini",       // o el modelo que uses en producción
+  temperature: 0.3,  messages: [
+   { role: "system", content: NATURAL_PROMPT(question, data) }
+   ],
+});
   return resp.choices[0].message.content?.trim() || "No se pudo generar una respuesta.";
 };

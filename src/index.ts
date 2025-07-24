@@ -44,6 +44,7 @@ mongoose
 // tus rutas
 app.use("/ask", agentRoutes);
 app.use("/write", writeRoutes);
+app.use("/api", agentRoutes);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
