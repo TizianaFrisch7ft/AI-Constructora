@@ -110,12 +110,13 @@ export const getSmartAnswer = async (
 };
 
 // ✅ FUNCIÓN PARA DETECTAR ENTIDADES MENCIONADAS
+// Modifica la función detectEntities para incluir RUT (legal_id), SCORE y NOMBRE (name) en Vendor
 function detectEntities(
   answer: string,
   collections: Record<string, any[]>
-): { type: string; name: string }[] {
+): { type: string; name: string; rut?: string }[] {
   const lower = answer.toLowerCase();
-  const entities: { type: string; name: string }[] = [];
+  const entities: { type: string; name: string; rut?: string }[] = [];
   const seen = new Set<string>();
 
   const rules: Record<string, string[]> = {
@@ -141,7 +142,15 @@ function detectEntities(
         if (value && lower.includes(value.toLowerCase())) {
           const key = `${type}-${value}`;
           if (!seen.has(key)) {
-            entities.push({ type, name: value });
+            if (type === "Vendor") {
+              entities.push({
+                type,
+                name: item.name,
+                rut: item.legal_id,
+              });
+            } else {
+              entities.push({ type, name: value });
+            }
             seen.add(key);
           }
           break; // match único por item
