@@ -114,9 +114,9 @@ export const getSmartAnswer = async (
 function detectEntities(
   answer: string,
   collections: Record<string, any[]>
-): { type: string; name: string; rut?: string }[] {
+): { type: string; name: string; rut?: string; surname?: string }[] {
   const lower = answer.toLowerCase();
-  const entities: { type: string; name: string; rut?: string }[] = [];
+  const entities: { type: string; name: string; rut?: string; surname?: string }[] = [];
   const seen = new Set<string>();
 
   const rules: Record<string, string[]> = {
@@ -147,6 +147,12 @@ function detectEntities(
                 type,
                 name: item.name,
                 rut: item.legal_id,
+              });
+            } else if (type === "PM") {
+              entities.push({
+                type,
+                name: item.name,
+                surname: item.surname,
               });
             } else {
               entities.push({ type, name: value });
