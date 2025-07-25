@@ -249,26 +249,51 @@ Consulta del usuario:
 // src/services/openaiService.ts
 const NATURAL_PROMPT = (question: string, data: any) => `
 Eres un asistente que responde consultas sobre nuestra base de datos de construcción.
-Tienes estos objetivos:
 
-1. Arranca con una frase natural y variable (p.ej. “Claro, esto es lo que encontré:”, “Aquí tienes los datos:”).
-2. Presenta los datos de \`data\`:
-   - Si vienen objetos simples, haz una lista de viñetas.
-   - Si vienen varios campos, genera una tabla Markdown.
-3. Al final añade una sección **Entidades detectadas:** con badges en línea \`[tipo: valor]\`.
-4. Si pedimos cálculos (sumas, promedios, comparaciones), hazlos tú mismo.
-5. Si no hay datos, di “Lo siento, no encontré resultados para esa consulta.”
+1. Comienza con una frase natural (“Claro, esto es lo que encontré:”, “Aquí tienes los datos:”, etc).
+2. Presenta los datos recibidos en \`data\`:
+   - Si vienen objetos simples, hacé una lista.
+   - Si son objetos con múltiples campos, hacé una tabla en Markdown.
+3. Agregá al final una sección **Entidades detectadas:** con badges en línea así → \`[tipo: valor]\`.
+4. Si no hay resultados, respondé: “Lo siento, no encontré resultados para esa consulta.”
 
-**Consulta del usuario:**
+---
+
+🎯 Reglas adicionales para enviar recordatorios:
+- Si la pregunta menciona **"PM"** y **"cotiz"** (o sinónimos como “cotizaciones”, “cotizó”, “no enviaron”, etc), y
+- Si hay PMs en los datos vinculados a RFQs o cotizaciones **que no tienen status igual a "done" ni "COMPLETED"** (u otro indicador de finalización),
+❗ Reglas de consistencia lógica:
+- Un mismo PM **no puede ser considerado cumplidor e incumplidor a la vez**.
+- Si tiene al menos una cotización no finalizada (por ejemplo, "WIP", "Waiting"), debe considerarse como incumplidor.
+- Solo considerar cumplidores a los PMs cuyas cotizaciones están **todas en estado "done" o "COMPLETED"**.
+
+🔁 Entonces, **además** de la respuesta natural, **al final** devolvé este bloque JSON (y nada más fuera del JSON):
+
+\`\`\`json
+{
+  "offerReminder": true,
+  "reminderRecipients": [
+    { "name": "Nombre del PM", "email": "email@ejemplo.com" }
+  ],
+  "rfqId": "id_rfq_relacionado"
+}
+\`\`\`
+
+Si no aplica, **no devuelvas ningún JSON** extra.
+
+---
+
+Consulta del usuario:
 \`\`\`
 ${question}
 \`\`\`
 
-**Datos JSON:**
+Datos JSON:
 \`\`\`json
 ${JSON.stringify(data, null, 2)}
 \`\`\`
 `;
+
 
 /* ---------- Funciones ---------- */
 export const getMongoQuery = async (question: string): Promise<ReadPlan> => {
@@ -290,13 +315,13 @@ export const getMongoWriteOp = async (question: string): Promise<WriteOp> => {
   });
   return safeJSON<WriteOp>(resp.choices[0].message.content || "");
 };
-
 export const getNaturalAnswer = async (question: string, data: any): Promise<string> => {
+  console.log("📦 Datos pasados a getNaturalAnswer:", JSON.stringify(data, null, 2));
   const resp = await openai.chat.completions.create({
-  model: "gpt-4o-mini",       // o el modelo que uses en producción
-  temperature: 0.3,  messages: [
-   { role: "system", content: NATURAL_PROMPT(question, data) }
-   ],
-});
+    model: "gpt-4o", // o el modelo que uses
+    temperature: 0.3,
+    messages: [{ role: "system", content: NATURAL_PROMPT(question, data) }],
+  });
+
   return resp.choices[0].message.content?.trim() || "No se pudo generar una respuesta.";
 };

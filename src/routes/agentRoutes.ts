@@ -4,6 +4,7 @@ import {
   handleSmartAsk,
   handleSmartAskWithWrite,
 } from "../controllers/agentControllers";
+import { sendReminder } from "../controllers/sendReminderController";
 
 const router = express.Router();
 
@@ -15,5 +16,7 @@ router.post("/ask/smart", handleSmartAsk);
 
 // ✍️ Escritura inteligente con confirmación opcional
 router.post("/ask/smart-write", handleSmartAskWithWrite);
+
+router.post("/send-reminder", sendReminder);
 
 export default router;

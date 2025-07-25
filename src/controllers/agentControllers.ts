@@ -57,14 +57,43 @@ export const handleSmartAsk = async (req: Request, res: Response) => {
 
   try {
     const cleanQuestion = question.trim();
-    const result = await getSmartAnswer(cleanQuestion);
+    const { answer, entities } = await getSmartAnswer(cleanQuestion);
 
-    return res.json({
-      success: true,
-      agent: "SmartAgent",
-      answer: result.answer,
-      entities: result.entities || [],
-    });
+    const result: any = {
+      answer,
+      entities,
+    };
+
+    // 🔍 Normalizar pregunta para evaluar intención
+    const questionLower = cleanQuestion.toLowerCase();
+
+    const shouldSendReminder =
+      questionLower.includes("pm") &&
+      (
+        questionLower.includes("no entreg") ||
+        questionLower.includes("no pas") ||
+        questionLower.includes("falt") ||
+        questionLower.includes("termin") ||
+        questionLower.includes("incumpl")
+      ) &&
+      questionLower.includes("cotiz");
+
+    if (shouldSendReminder) {
+      const pmEntities = entities.filter(e => e.type === 'PM' && e.email);
+
+      const reminderRecipients = pmEntities.map(e => ({
+        name: e.name,
+        email: e.email,
+      }));
+
+      result.offerReminder = true;
+      result.reminderRecipients = reminderRecipients;
+
+      // Podés reemplazar esta parte si tenés una lógica real para obtener el RFQ activo
+      result.rfqId = "664f19a02ab2235d3f91c44a";
+    }
+
+    return res.json(result);
   } catch (err: any) {
     console.error("❌ Error en /ask/smart:", err);
     return res.status(500).json({

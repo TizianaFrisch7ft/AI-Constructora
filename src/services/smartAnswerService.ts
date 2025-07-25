@@ -1,3 +1,4 @@
+// src/controllers/agent.ts
 import OpenAI from "openai";
 import dotenv from "dotenv";
 
@@ -15,19 +16,30 @@ import SchedulePurLine from "../models/SchedulePurLine";
 
 dotenv.config();
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+export interface SmartEntity {
+  type: string;
+  id?: string;
+  name: string;
+  rut?: string;
+  surname?: string;
+  email?: string;
+}
 
 export const getSmartAnswer = async (
   question: string
 ): Promise<{
   answer: string;
-  entities: { type: string; name: string }[];
+  entities: SmartEntity[];
+  offerReminder?: boolean;
+  reminderRecipients?: { name: string; email: string }[];
+  rfqId?: string | null;
 }> => {
   try {
+    // 1) Cargo todos los datos
     const [
       vendors,
       projects,
-      quotes,
+      quotesRaw,
       quoteLines,
       evals,
       evalLines,
@@ -39,7 +51,7 @@ export const getSmartAnswer = async (
     ] = await Promise.all([
       Vendor.find().lean(),
       Project.find().lean(),
-      QuoteRequest.find().lean(),
+      QuoteRequest.find().lean(),      // <-- aquí llegan los RFQs sin pm_id ni status
       QuoteRequestLine.find().lean(),
       Eval.find().lean(),
       EvalLine.find().lean(),
@@ -50,6 +62,10 @@ export const getSmartAnswer = async (
       SchedulePurLine.find().lean(),
     ]);
 
+    // Chapuza de tipo para poder leer pm_id y status
+    const quotes = quotesRaw as Array<any>;
+
+    // 2) Llamada a OpenAI
     const context = {
       vendors,
       projects,
@@ -63,27 +79,26 @@ export const getSmartAnswer = async (
       schedules,
       scheduleLines,
     };
+    const systemPrompt = `Sos un experto en gestión de compras y proyectos. Tenés acceso a los datos internos en JSON. Contestá en español, con precisión, sin inventar nada.`;
+    const userPrompt = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
 
-    const system = `Sos un experto en gestión de compras y proyectos. Tenés acceso a los datos internos en JSON. Contestá en español, con precisión, sin inventar nada.`;
-    const user = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
+    const chat = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+      .chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.3,
+      });
 
-    const chat = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0.3,
-    });
+    const answer = chat.choices[0].message.content?.trim() || "No se pudo generar respuesta.";
 
-    const answer =
-      chat.choices[0].message.content?.trim() ||
-      "No se pudo generar respuesta.";
-
-       const entities = detectEntities(answer, {
+    // 3) Detección de entidades (idéntico)
+    const allEntities = detectEntities(answer, {
       Vendor: vendors,
       Project: projects,
-      QuoteRequest: quotes,
+      QuoteRequest: quotesRaw,
       QuoteRequestLine: quoteLines,
       Eval: evals,
       EvalLine: evalLines,
@@ -93,32 +108,73 @@ export const getSmartAnswer = async (
       SchedulePur: schedules,
       SchedulePurLine: scheduleLines,
     });
-
-    // 🔍 Solo las entidades clave
     const allowedTypes = ["Vendor", "Project", "PM", "QuoteRequest", "SchedulePur"];
-    const filteredEntities = entities.filter((e) => allowedTypes.includes(e.type));
+    const entities = allEntities.filter((e) => allowedTypes.includes(e.type));
 
-    return {
-      answer,
-      entities: filteredEntities,
-    };
+    // 4) Lógica de recordatorios
+    const pmReminderRegex =
+      /(?=.*\b(?:pm|project\s*manager)\b)(?=.*\b(?:cotiz|cotización|quote|rfq)\b)/i;
+    let offerReminder = false;
+    let reminderRecipients: { name: string; email: string }[] = [];
 
+    if (pmReminderRegex.test(question)) {
+      // tomamos TODOS los PMs con email e id detectado
+      const pmEntities = entities.filter((e) => e.type === "PM" && e.email && e.id);
+
+      // Agrupar statuses (usando el any) por pm_id
+      const pmRFQMap: Record<string, string[]> = {};
+      for (const q of quotes) {
+        const pmId = String((q as any).pm_id || "");
+        const status = String((q as any).status || "").toLowerCase();
+        if (!pmRFQMap[pmId]) pmRFQMap[pmId] = [];
+        pmRFQMap[pmId].push(status);
+      }
+
+      // Determinar incumplidores
+      const pmsIncumplidores = new Set<string>();
+      for (const [pmId, statuses] of Object.entries(pmRFQMap)) {
+        const allCompleted = statuses.every((s) =>
+          ["completed", "done"].includes(s)
+        );
+        if (!allCompleted) {
+          pmsIncumplidores.add(pmId);
+        }
+      }
+
+      // Filtrar solo los PMs incumplidores
+      reminderRecipients = pmEntities
+        .filter((pm) => pm.id && pmsIncumplidores.has(pm.id))
+        .map((pm) => ({ name: pm.name, email: pm.email! }));
+
+      offerReminder = reminderRecipients.length > 0;
+    }
+
+    // Tomamos el primer RFQ pendiente para el primer reminderRecipient
+    const rfq = quotes.find((q) =>
+      reminderRecipients.some((r) =>
+        String((q as any).rfq_id || (q as any).qr_id || "")
+          .toLowerCase()
+          .includes(r.name.toLowerCase().split(" ")[0])
+      ) &&
+      String((q as any).status || "").toLowerCase() !== "completed"
+    );
+    const rfqId = rfq ? String((rfq as any)._id) : null;
+
+    return { answer, entities, offerReminder, reminderRecipients, rfqId };
   } catch (err: any) {
     console.error("❌ Error en getSmartAnswer:", err);
     throw new Error("Error generando la respuesta inteligente.");
   }
 };
 
-// ✅ FUNCIÓN PARA DETECTAR ENTIDADES MENCIONADAS
-// Modifica la función detectEntities para incluir RUT (legal_id), SCORE y NOMBRE (name) en Vendor
+// Función de detección de entidades
 function detectEntities(
   answer: string,
   collections: Record<string, any[]>
-): { type: string; name: string; rut?: string; surname?: string }[] {
+): SmartEntity[] {
   const lower = answer.toLowerCase();
-  const entities: { type: string; name: string; rut?: string; surname?: string }[] = [];
+  const result: SmartEntity[] = [];
   const seen = new Set<string>();
-
   const rules: Record<string, string[]> = {
     Vendor: ["name", "legal_id"],
     Project: ["name", "id"],
@@ -135,35 +191,33 @@ function detectEntities(
 
   for (const [type, items] of Object.entries(collections)) {
     const fields = rules[type] || [];
-    items.forEach((item) => {
+    for (const item of items) {
       for (const field of fields) {
         const raw = item?.[field];
-        const value = String(raw || "").trim();
-        if (value && lower.includes(value.toLowerCase())) {
-          const key = `${type}-${value}`;
-          if (!seen.has(key)) {
-            if (type === "Vendor") {
-              entities.push({
-                type,
-                name: item.name,
-                rut: item.legal_id,
-              });
-            } else if (type === "PM") {
-              entities.push({
-                type,
-                name: item.name,
-                surname: item.surname,
-              });
-            } else {
-              entities.push({ type, name: value });
-            }
-            seen.add(key);
+        const val = String(raw || "").trim();
+        if (val && lower.includes(val.toLowerCase())) {
+          const key = `${type}|${field}|${val}`;
+          if (seen.has(key)) break;
+          seen.add(key);
+
+          if (type === "Vendor") {
+            result.push({ type, name: item.name, rut: item.legal_id });
+          } else if (type === "PM") {
+            result.push({
+              type,
+              id: String(item._id),              // <–– asigna aquí el _id
+              name: `${item.name}${item.surname ? ` ${item.surname}` : ""}`,
+              surname: item.surname,
+              email: item.email,
+            });
+          } else {
+            result.push({ type, name: val });
           }
-          break; // match único por item
+          break;
         }
       }
-    });
+    }
   }
 
-  return entities;
+  return result;
 }
