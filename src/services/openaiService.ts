@@ -81,6 +81,8 @@ Colecciones permitidas (usa el nombre EXACTO):
 - rfqs
 - consumablereqs
 - deliveryissues
+- pms
+- projectpms
 `;
 
 const FIELDS_DESC = `
@@ -96,7 +98,10 @@ projectvendors: ["project_id","vendor_id","score","status"]
 rfqs: ["rfq_id","project_id","vendor_id","products","sent_at","responded_at","status"]
 consumablereqs: ["req_id","project_id","pm_id","pm_name","product_id","qty","due_date","status","created_at"]
 deliveryissues: ["issue_id","vendor_id","project_id","type","description","occurred_at","resolved"]
+pms: ["id", "email", "name", "surname"]
+projectpms: ["project_id", "pm_id", "name", "surname"]
 `;
+
 
 const READ_PROMPT = (question: string) => `
 Sos un generador de consultas para MongoDB.

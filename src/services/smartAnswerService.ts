@@ -3,21 +3,23 @@ import dotenv from "dotenv";
 
 import Vendor from "../models/Vendor";
 import Project from "../models/Project";
-import Quote from "../models/Quote";
-import QuoteLine from "../models/QuoteLine";
-import VendorEval from "../models/VendorEval";
-import VendorEvalLine from "../models/VendorEvalLine";
-import PreselectVendor from "../models/PreselectVendor";
+import QuoteRequest from "../models/QuoteRequest";
+import QuoteRequestLine from "../models/QuoteRequestLine";
+import Eval from "../models/Eval";
+import EvalLine from "../models/Eval_line";
 import ProjectVendor from "../models/ProjectVendor";
-import RFQ from "../models/RFQ";
-import DeliveryIssue from "../models/DeliveryIssue";
-import ConsumableReq from "../models/ConsumableReq";
+import PM from "../models/PM";
+import ProjectPM from "../models/ProjectPM";
+import SchedulePur from "../models/SchedulePur";
+import SchedulePurLine from "../models/SchedulePurLine";
 
 dotenv.config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-export const getSmartAnswer = async (question: string): Promise<{
+export const getSmartAnswer = async (
+  question: string
+): Promise<{
   answer: string;
   entities: { type: string; name: string }[];
 }> => {
@@ -27,25 +29,25 @@ export const getSmartAnswer = async (question: string): Promise<{
       projects,
       quotes,
       quoteLines,
-      vendorEvals,
-      vendorEvalLines,
-      preselects,
+      evals,
+      evalLines,
       projectVendors,
-      rfqs,
-      issues,
-      consumables,
+      pms,
+      projectPMs,
+      schedules,
+      scheduleLines,
     ] = await Promise.all([
       Vendor.find().lean(),
       Project.find().lean(),
-      Quote.find().lean(),
-      QuoteLine.find().lean(),
-      VendorEval.find().lean(),
-      VendorEvalLine.find().lean(),
-      PreselectVendor.find().lean(),
+      QuoteRequest.find().lean(),
+      QuoteRequestLine.find().lean(),
+      Eval.find().lean(),
+      EvalLine.find().lean(),
       ProjectVendor.find().lean(),
-      RFQ.find().lean(),
-      DeliveryIssue.find().lean(),
-      ConsumableReq.find().lean(),
+      PM.find().lean(),
+      ProjectPM.find().lean(),
+      SchedulePur.find().lean(),
+      SchedulePurLine.find().lean(),
     ]);
 
     const context = {
@@ -53,13 +55,13 @@ export const getSmartAnswer = async (question: string): Promise<{
       projects,
       quotes,
       quoteLines,
-      vendorEvals,
-      vendorEvalLines,
-      preselects,
+      evals,
+      evalLines,
       projectVendors,
-      rfqs,
-      issues,
-      consumables,
+      pms,
+      projectPMs,
+      schedules,
+      scheduleLines,
     };
 
     const system = `Sos un experto en gestión de compras y proyectos. Tenés acceso a los datos internos en JSON. Contestá en español, con precisión, sin inventar nada.`;
@@ -74,28 +76,40 @@ export const getSmartAnswer = async (question: string): Promise<{
       temperature: 0.3,
     });
 
-    const answer = chat.choices[0].message.content?.trim() || "No se pudo generar respuesta.";
+    const answer =
+      chat.choices[0].message.content?.trim() ||
+      "No se pudo generar respuesta.";
 
-    const entities = detectEntities(answer, {
+       const entities = detectEntities(answer, {
       Vendor: vendors,
       Project: projects,
-      Quote: quotes,
-      RFQ: rfqs,
-      Consumable: consumables,
-      Issue: issues,
+      QuoteRequest: quotes,
+      QuoteRequestLine: quoteLines,
+      Eval: evals,
+      EvalLine: evalLines,
+      ProjectVendor: projectVendors,
+      PM: pms,
+      ProjectPM: projectPMs,
+      SchedulePur: schedules,
+      SchedulePurLine: scheduleLines,
     });
+
+    // 🔍 Solo las entidades clave
+    const allowedTypes = ["Vendor", "Project", "PM", "QuoteRequest", "SchedulePur"];
+    const filteredEntities = entities.filter((e) => allowedTypes.includes(e.type));
 
     return {
       answer,
-      entities,
+      entities: filteredEntities,
     };
+
   } catch (err: any) {
     console.error("❌ Error en getSmartAnswer:", err);
     throw new Error("Error generando la respuesta inteligente.");
   }
 };
 
-// ✅ FUNCION CENTRAL PARA DETECTAR ENTIDADES MENCIONADAS
+// ✅ FUNCIÓN PARA DETECTAR ENTIDADES MENCIONADAS
 function detectEntities(
   answer: string,
   collections: Record<string, any[]>
@@ -106,11 +120,16 @@ function detectEntities(
 
   const rules: Record<string, string[]> = {
     Vendor: ["name", "legal_id"],
-    Project: ["name", "client_name"],
-    Quote: ["code", "project_id"],
-    RFQ: ["title", "project_id"],
-    Consumable: ["product_id", "req_id", "pm_name"],
-    Issue: ["issue_code", "description"],
+    Project: ["name", "id"],
+    QuoteRequest: ["qr_id", "reference"],
+    QuoteRequestLine: ["reference", "product_id"],
+    Eval: ["eval_id", "eval_name"],
+    EvalLine: ["name"],
+    ProjectVendor: ["project_id", "vendor_id"],
+    PM: ["name", "surname", "email"],
+    ProjectPM: ["project_id", "pm_id", "name", "surname"],
+    SchedulePur: ["cc_id", "description"],
+    SchedulePurLine: ["reference", "product_id"],
   };
 
   for (const [type, items] of Object.entries(collections)) {

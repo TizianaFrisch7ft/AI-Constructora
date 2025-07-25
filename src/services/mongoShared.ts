@@ -1,102 +1,76 @@
-import mongoose from "mongoose";
-import Vendor from "../models/Vendor";
-import Project from "../models/Project";
-import Quote from "../models/Quote";
-import QuoteLine from "../models/QuoteLine";
-import VendorEval from "../models/VendorEval";
-import VendorEvalLine from "../models/VendorEvalLine";
-import PreselectVendor from "../models/PreselectVendor";
-import ProjectVendor from "../models/ProjectVendor";
-import RFQ from "../models/RFQ";
-import ConsumableReq from "../models/ConsumableReq";
-import DeliveryIssue from "../models/DeliveryIssue";
-
-export const models: Record<string, mongoose.Model<any>> = {
-  vendors: Vendor,
-  projects: Project,
-  quotes: Quote,
-  quotelines: QuoteLine,
-  vendorevals: VendorEval,
-  vendorevallines: VendorEvalLine,
-  preselectvendors: PreselectVendor,
-  projectvendors: ProjectVendor,
-  rfqs: RFQ,
-  consumablereqs: ConsumableReq,
-  deliveryissues: DeliveryIssue,
-};
-
-export const FIELDS: Record<string, string[]> = {
-  vendors: ["id","name","reference_name","class","rubro","legal_type","legal_id","main_mail","in_contact_name","mobile","status","type","score_avg"],
-  projects: ["id","name"],
-  quotes: ["id","project_id","vendor_id","date"],
-  quotelines: ["id","line_no","product_id","reference","price","qty","delivery_date","project_id","vendor_id"],
-  vendorevals: ["eval_id","eval_name","vendor_id","start_date","due_date","type","attach_id"],
-  vendorevallines: ["eval_id","line_no","name","value","check","attach_id"],
-  preselectvendors: ["project_id","vendor_id","status"],
-  projectvendors: ["project_id","vendor_id","score","status"],
-  rfqs: ["rfq_id","project_id","vendor_id","products","sent_at","responded_at","status"],
-  consumablereqs: ["req_id","project_id","pm_id","pm_name","product_id","qty","due_date","status","created_at"],
-  deliveryissues: ["issue_id","vendor_id","project_id","type","description","occurred_at","resolved"],
-};
-
-const FIELD_ALIAS: Record<string, Record<string, string>> = {
-  vendors: {
-    category: "rubro",
-    promedio: "score_avg",
-    score: "score_avg",
-    tipo: "class",
-    estado: "status",
-    vendorid: "id",
-    vendor_id: "id",
-    vendorId: "id",
-  },
-  quotes: {
-    quote_id: "id",
-  },
-  quotelines: {
-    quote_id: "id",
-  },
-  projectvendors: {
-    vendorId: "vendor_id",
-    projectId: "project_id",
-  },
-  rfqs: {
-    rfqId: "rfq_id",
-  },
-  consumablereqs: {
-    reqId: "req_id",
-    pmid: "pm_id",
-    pm: "pm_id"
-  },
-  deliveryissues: {
-    issueId: "issue_id",
-  }
-};
+import mongoose from "mongoose"
+import Vendor from "../models/Vendor"
+import Project from "../models/Project"
+import QuoteRequest from "../models/QuoteRequest"
+import QuoteRequestLine from "../models/QuoteRequestLine"
+import Eval from "../models/Eval"
+import EvalLine from "../models/Eval_line"
+import ProjectVendor from "../models/ProjectVendor"
+import PM from "../models/PM"
+import ProjectPM from "../models/ProjectPM"
+import SchedulePur from "../models/SchedulePur"
+import SchedulePurLine from "../models/SchedulePurLine"
 
 export const normalize = (s: string) =>
-  s.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  s.trim().toLowerCase().replace(/[\s_-]+/g, "")
 
-export const applyAliases = (col: string, filter: Record<string, any>) => {
-  const aliases = FIELD_ALIAS[col] || {};
-  const out: any = {};
-  for (const k of Object.keys(filter || {})) {
-    const realKey = aliases[k] || k;
-    out[realKey] = filter[k];
-  }
-  return out;
-};
+export const models: Record<string, mongoose.Model<any>> = {
+  vendor: Vendor,
+  project: Project,
+  quoterequest: QuoteRequest,
+  quoterequestline: QuoteRequestLine,
+  eval: Eval,
+  evalline: EvalLine,
+  projectvendor: ProjectVendor,
+  pm: PM,
+  projectpm: ProjectPM,
+  schedulepur: SchedulePur,
+  schedulepurline: SchedulePurLine,
+}
 
-export const stripUnknownFields = (col: string, obj: any): any => {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
-  const allowed = new Set(FIELDS[col] || []);
-  const clean: any = {};
-  for (const key of Object.keys(obj)) {
-    if (key.startsWith("$")) {
-      clean[key] = stripUnknownFields(col, obj[key]);
-    } else if (allowed.has(key)) {
-      const val = obj[key];
-      clean[key] = stripUnknownFields(col, val);
+export const FIELDS: Record<string, string[]> = {
+  vendor: ["id", "name", "legal_id", "category", "status"],
+  project: ["id", "name", "client_name", "status"],
+  quoterequest: ["qr_id", "reference", "project_id"],
+  quoterequestline: ["id", "qr_id", "product_id", "reference"],
+  eval: ["eval_id", "eval_name", "project_id"],
+  evalline: ["name", "criteria", "score", "eval_id"],
+  projectvendor: ["project_id", "vendor_id", "status"],
+  pm: ["id", "name", "surname", "email"],
+  projectpm: ["project_id", "pm_id", "name", "surname"],
+  schedulepur: ["cc_id", "description", "project_id"],
+  schedulepurline: ["reference", "product_id", "cc_id"],
+}
+
+export const applyAliases = (
+  col: string,
+  filter: Record<string, any>
+): Record<string, any> => {
+  const key = normalize(col)
+  const allowed = FIELDS[key] || []
+  const out: Record<string, any> = {}
+
+  for (const [k, v] of Object.entries(filter)) {
+    const norm = normalize(k)
+    const match = allowed.find((f) => normalize(f) === norm)
+    if (match) {
+      out[match] = v
     }
   }
-  return clean;
-};
+
+  return out
+}
+
+export const stripUnknownFields = (col: string, obj: any): any => {
+  const key = normalize(col)
+  const allowed = FIELDS[key] || []
+  const result: any = {}
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (allowed.includes(k)) {
+      result[k] = v
+    }
+  }
+
+  return result
+}

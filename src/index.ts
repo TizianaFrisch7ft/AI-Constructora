@@ -8,12 +8,17 @@ import writeRoutes from "./routes/writeRoutes";
 // importa tus modelos para inicializarlos
 import "./models/Project";
 import "./models/Vendor";
-import "./models/VendorEval";
-import "./models/VendorEvalLine";
-import "./models/PreselectVendor";
+// import "./models/VendorEval";
+// import "./models/VendorEvalLine";
+import "./models/Eval";
+import "./models/Eval_line";
 import "./models/ProjectVendor";
-import "./models/Quote";
-import "./models/QuoteLine";
+import "./models/SchedulePur";
+import "./models/SchedulePurLine";
+import "./models/QuoteRequest";
+import "./models/QuoteRequestLine";
+import "./models/PM";
+import "./models/ProjectPM";
 
 dotenv.config();
 

@@ -11,15 +11,15 @@ import {
 
 import Vendor from "../models/Vendor"
 import Project from "../models/Project"
-import Quote from "../models/Quote"
-import QuoteLine from "../models/QuoteLine"
-import VendorEval from "../models/VendorEval"
-import VendorEvalLine from "../models/VendorEvalLine"
-import PreselectVendor from "../models/PreselectVendor"
+import QuoteRequest from "../models/QuoteRequest"
+import QuoteRequestLine from "../models/QuoteRequestLine"
+import Eval from "../models/Eval"
+import EvalLine from "../models/Eval_line"
 import ProjectVendor from "../models/ProjectVendor"
-import RFQ from "../models/RFQ"
-import DeliveryIssue from "../models/DeliveryIssue"
-import ConsumableReq from "../models/ConsumableReq"
+import PM from "../models/PM"
+import ProjectPM from "../models/ProjectPM"
+import SchedulePur from "../models/SchedulePur"
+import SchedulePurLine from "../models/SchedulePurLine"
 
 dotenv.config()
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! })
@@ -35,19 +35,45 @@ export const getSmartAnswerWithWrite = async (
     console.log("📥 Pregunta recibida:", question)
 
     const [
-      vendors, projects, quotes, quoteLines, vendorEvals,
-      vendorEvalLines, preselects, projectVendors, rfqs, issues, consumables,
+      vendors,
+      projects,
+      quotes,
+      quoteLines,
+      evals,
+      evalLines,
+      projectVendors,
+      pms,
+      projectPMs,
+      schedules,
+      scheduleLines,
     ] = await Promise.all([
-      Vendor.find().lean(), Project.find().lean(), Quote.find().lean(), QuoteLine.find().lean(),
-      VendorEval.find().lean(), VendorEvalLine.find().lean(), PreselectVendor.find().lean(),
-      ProjectVendor.find().lean(), RFQ.find().lean(), DeliveryIssue.find().lean(), ConsumableReq.find().lean(),
+      Vendor.find().lean(),
+      Project.find().lean(),
+      QuoteRequest.find().lean(),
+      QuoteRequestLine.find().lean(),
+      Eval.find().lean(),
+      EvalLine.find().lean(),
+      ProjectVendor.find().lean(),
+      PM.find().lean(),
+      ProjectPM.find().lean(),
+      SchedulePur.find().lean(),
+      SchedulePurLine.find().lean(),
     ])
 
     console.log("📦 Datos cargados de Mongo")
 
     const context = {
-      vendors, projects, quotes, quoteLines, vendorEvals,
-      vendorEvalLines, preselects, projectVendors, rfqs, issues, consumables,
+      vendors,
+      projects,
+      quotes,
+      quoteLines,
+      evals,
+      evalLines,
+      projectVendors,
+      pms,
+      projectPMs,
+      schedules,
+      scheduleLines,
     }
 
     const system = `Sos un experto en gestión de compras y proyectos. Podés ver datos y también ejecutar operaciones en la base. Contestá en español, con precisión, sin inventar nada.`
@@ -86,7 +112,6 @@ export const getSmartAnswerWithWrite = async (
         }
       }
 
-      // ✅ Asignar ID automáticamente si falta
       const isInsert = op.action === "insertOne" || op.action === "insertMany"
       const key = normalize(op.collection)
       let data = (op as any).data
@@ -125,9 +150,19 @@ export const getSmartAnswerWithWrite = async (
     })
 
     const answer = finalResp.choices[0].message.content?.trim() || "No se pudo generar respuesta."
+
     const entities = detectEntities(answer, {
-      Vendor: vendors, Project: projects, Quote: quotes,
-      RFQ: rfqs, Consumable: consumables, Issue: issues,
+      Vendor: vendors,
+      Project: projects,
+      QuoteRequest: quotes,
+      QuoteRequestLine: quoteLines,
+      Eval: evals,
+      EvalLine: evalLines,
+      ProjectVendor: projectVendors,
+      PM: pms,
+      ProjectPM: projectPMs,
+      SchedulePur: schedules,
+      SchedulePurLine: scheduleLines,
     })
 
     return { answer, entities }
@@ -147,11 +182,16 @@ function detectEntities(
 
   const rules: Record<string, string[]> = {
     Vendor: ["name", "legal_id"],
-    Project: ["name", "client_name"],
-    Quote: ["code", "project_id"],
-    RFQ: ["title", "project_id"],
-    Consumable: ["product_id", "req_id", "pm_name"],
-    Issue: ["issue_code", "description"],
+    Project: ["name", "id"],
+    QuoteRequest: ["qr_id", "reference"],
+    QuoteRequestLine: ["reference", "product_id"],
+    Eval: ["eval_id", "eval_name"],
+    EvalLine: ["name"],
+    ProjectVendor: ["project_id", "vendor_id"],
+    PM: ["name", "surname", "email"],
+    ProjectPM: ["project_id", "pm_id", "name", "surname"],
+    SchedulePur: ["cc_id", "description"],
+    SchedulePurLine: ["reference", "product_id"],
   }
 
   for (const [type, items] of Object.entries(collections)) {
