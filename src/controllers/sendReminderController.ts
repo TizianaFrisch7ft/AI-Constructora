@@ -1,6 +1,7 @@
 // src/controllers/sendReminderController.ts
 import { Request, Response } from "express";
 import { enviarMailPM } from "../lib/mail";
+// prueba de commit Tizi - 26/07
 
 export async function sendReminder(req: Request, res: Response) {
   const { rfqId, recipients } = req.body as {
