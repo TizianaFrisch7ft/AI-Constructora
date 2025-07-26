@@ -105,7 +105,7 @@ export const handleSmartAsk = async (req: Request, res: Response) => {
 // ✅ Smart agent LECTURA o ESCRITURA
 export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
   const { question, confirm } = req.body;
-
+// prueba de commit Tizi - 26/07
   if (!question || typeof question !== "string" || question.trim() === "") {
     return res.status(400).json({ error: "Falta la pregunta válida." });
   }

@@ -141,7 +141,7 @@ export const getSmartAnswer = async (
         }
       }
 
-      // Filtrar solo los PMs incumplidores
+      // Filtrar solo los PMs incumplidore
       reminderRecipients = pmEntities
         .filter((pm) => pm.id && pmsIncumplidores.has(pm.id))
         .map((pm) => ({ name: pm.name, email: pm.email! }));

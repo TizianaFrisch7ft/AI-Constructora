@@ -325,3 +325,4 @@ export const getNaturalAnswer = async (question: string, data: any): Promise<str
 
   return resp.choices[0].message.content?.trim() || "No se pudo generar una respuesta.";
 };
+// prueba de commit Tizi - 26/07
