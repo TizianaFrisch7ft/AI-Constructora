@@ -5,7 +5,7 @@ const QuoteRequestLineSchema = new Schema({
   line_no: { type: Number, required: true },
   qty: { type: Number, required: true },
   um: { type: String },
-  product_id: { type: Number }, // en algunos casos no es string
+  product_id: { type: String, required: true },
   reference: { type: String },
   reference_price: { type: Number },
   currency: { type: String, default: 'usd' },

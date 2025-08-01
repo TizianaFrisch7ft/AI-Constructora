@@ -10,7 +10,7 @@ const SchedulePurLineSchema = new Schema({
   reference_price: { type: Number },
   currency: { type: String, default: 'usd' },
   desired_date: { type: Date },
-  project_id: { type: String, required: true }, // FK a Project
+  project_id: { type: String, required: false },
   vendor_list: [{ type: String }] // array de IDs de vendors
 });
 

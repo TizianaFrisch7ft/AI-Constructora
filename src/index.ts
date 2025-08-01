@@ -19,7 +19,10 @@ import "./models/QuoteRequest";
 import "./models/QuoteRequestLine";
 import "./models/PM";
 import "./models/ProjectPM";
-
+import schedulePurRoutes from "./routes/schedulePurRoutes";
+import schedulePurLineRoutes from "./routes/schedulePurLineRoutes";
+import quoteRequestRoutes from "./routes/quoteRequest";
+import vendorRoutes from "./routes/vendorRoutes";
 dotenv.config();
 
 const app = express();
@@ -47,11 +50,14 @@ mongoose
   });
 
 // tus rutas
-app.use("/ask", agentRoutes);
+
 app.use("/write", writeRoutes);
+
+app.use("/api", schedulePurRoutes);
+app.use("/api/schedule-lines", schedulePurLineRoutes);
 app.use("/api", agentRoutes);
-
-
+app.use("/api", quoteRequestRoutes);
+app.use("/api", vendorRoutes);
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
