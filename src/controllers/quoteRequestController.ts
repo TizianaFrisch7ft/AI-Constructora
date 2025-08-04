@@ -19,15 +19,16 @@ export const generateQuoteRequests = async (req: Request, res: Response) => {
         const existingLine = await QuoteRequestLine.findOne({
           cc_id: line.cc_id,
           cc_id_line: line.line_no,
-        }).populate({
-          path: "qr_id",
-          match: { vendor_id: vendor },
-          model: QuoteRequest,
+          qr_id: { $exists: true }
         });
 
-        if (existingLine && existingLine.qr_id) {
-          console.log(`🔁 Ya existe una quote para línea ${line.line_no} y proveedor ${vendor}`);
-          continue; // Salteamos si ya existe
+        if (existingLine) {
+          // Buscar la QuoteRequest correspondiente y comparar vendor_id
+          const qr = await QuoteRequest.findOne({ qr_id: existingLine.qr_id, vendor_id: vendor });
+          if (qr) {
+            console.log(`🔁 Ya existe una quote para línea ${line.line_no} y proveedor ${vendor}`);
+            continue; // Salteamos si ya existe
+          }
         }
 
         if (!vendorGroups[vendor]) vendorGroups[vendor] = [];
@@ -73,11 +74,19 @@ export const generateQuoteRequests = async (req: Request, res: Response) => {
       message: "Quote Requests generadas correctamente.",
       result,
     });
-  } catch (error) {
-    console.error("❌ Error generando quotes:", error);
-    return res.status(500).json({ message: "Error interno al generar cotizaciones." });
+  } catch (error: any) {
+    console.error("❌ Error generando quotes:");
+    console.error("📌 Mensaje:", error?.message);
+    console.error("📌 Stack:", error?.stack);
+    console.error("📌 Body recibido:", req.body);
+
+    return res.status(500).json({
+      message: "Error interno al generar cotizaciones.",
+      detalle: error?.message,
+    });
   }
 };
+
 // GET /api/quote-request
 export const getAllQuoteRequests = async (req: Request, res: Response) => {
   try {
@@ -98,6 +107,7 @@ export const getQuoteLinesById = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Error al obtener líneas de cotización." });
   }
 };
+
 // PATCH /api/quote-request-lines/:id
 export const updateQuoteRequestLine = async (req: Request, res: Response) => {
   try {
@@ -125,8 +135,10 @@ export const updateQuoteRequestLine = async (req: Request, res: Response) => {
     await line.save();
 
     res.json({ success: true, message: "Línea actualizada correctamente.", line });
-  } catch (error) {
-    console.error("❌ Error actualizando línea de quote:", error);
+  } catch (error: any) {
+    console.error("❌ Error actualizando línea de quote:");
+    console.error("📌 Mensaje:", error?.message);
+    console.error("📌 Stack:", error?.stack);
     res.status(500).json({ message: "Error interno al actualizar la línea." });
   }
 };
