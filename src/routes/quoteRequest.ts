@@ -3,13 +3,15 @@ import {
   generateQuoteRequests,
   getAllQuoteRequests,
   getQuoteLinesById,
-  updateQuoteRequestLine
+  updateQuoteRequestLine,
+  deleteQuoteRequestLine
 } from "../controllers/quoteRequestController";
 
 const router = express.Router();
 
 // ✅ PONER ESTA ANTES que las rutas con :params
 router.patch("/quote-request-lines/:id", updateQuoteRequestLine);
+router.delete("/quote-request-lines/:id", deleteQuoteRequestLine);
 
 // estas van después
 router.get("/quote-request/:qr_id/lines", getQuoteLinesById);

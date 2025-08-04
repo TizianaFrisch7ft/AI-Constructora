@@ -112,33 +112,71 @@ export const getQuoteLinesById = async (req: Request, res: Response) => {
 export const updateQuoteRequestLine = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { unit_price } = req.body;
-
-    if (typeof unit_price !== "number" || unit_price <= 0) {
-      return res.status(400).json({ message: "Precio inválido." });
-    }
+    const { unit_price, reference_price, status } = req.body;
 
     const line = await QuoteRequestLine.findById(id);
-
     if (!line) {
       return res.status(404).json({ message: "Línea no encontrada." });
     }
 
-    // Solo se permite modificar si está en waiting
+    // Permitir cambiar status de 'done' a 'waiting' y limpiar unit_price
+    if (typeof status === "string" && status === "waiting" && line.status === "done") {
+      line.status = "waiting";
+      if (unit_price === undefined || unit_price === null || unit_price === "") {
+        line.unit_price = undefined;
+      }
+      await line.save();
+      return res.json({ success: true, message: "Línea actualizada correctamente.", line });
+    }
+
+    // Solo se permite modificar precios si está en 'waiting'
     if (line.status !== "waiting") {
       return res.status(400).json({ message: "Solo se pueden modificar líneas en estado 'waiting'." });
     }
 
-    line.unit_price = unit_price;
-    line.status = "done";
+    let updated = false;
+    if (typeof unit_price === "number" && unit_price > 0) {
+      line.unit_price = unit_price;
+      line.status = "done";
+      updated = true;
+    }
+    if (typeof reference_price === "number" && reference_price > 0) {
+      line.reference_price = reference_price;
+      updated = true;
+    }
+
+    if (!updated) {
+      return res.status(400).json({ message: "No se proporcionó ningún valor válido para actualizar." });
+    }
 
     await line.save();
-
     res.json({ success: true, message: "Línea actualizada correctamente.", line });
   } catch (error: any) {
     console.error("❌ Error actualizando línea de quote:");
     console.error("📌 Mensaje:", error?.message);
     console.error("📌 Stack:", error?.stack);
     res.status(500).json({ message: "Error interno al actualizar la línea." });
+  }
+};
+
+// DELETE /api/quote-request-lines/:id
+export const deleteQuoteRequestLine = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const line = await QuoteRequestLine.findById(id);
+    if (!line) {
+      return res.status(404).json({ message: "Línea no encontrada." });
+    }
+    // Solo permitir eliminar si está en 'done'
+    if (line.status !== "done") {
+      return res.status(400).json({ message: "Solo se pueden eliminar líneas en estado 'done'." });
+    }
+    await line.deleteOne();
+    res.json({ success: true, message: "Línea eliminada correctamente." });
+  } catch (error: any) {
+    console.error("❌ Error eliminando línea de quote:");
+    console.error("📌 Mensaje:", error?.message);
+    console.error("📌 Stack:", error?.stack);
+    res.status(500).json({ message: "Error interno al eliminar la línea." });
   }
 };
