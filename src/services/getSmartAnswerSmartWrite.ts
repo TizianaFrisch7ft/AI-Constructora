@@ -11,7 +11,7 @@ import {
 
 import Vendor from "../models/Vendor"
 import Project from "../models/Project"
-import QuoteRequest from "../models/QuoteRequest"
+import QuoteRequest from "../models/QuoteRequest";
 import QuoteRequestLine from "../models/QuoteRequestLine"
 import Eval from "../models/Eval"
 import EvalLine from "../models/Eval_line"
@@ -20,6 +20,7 @@ import PM from "../models/PM"
 import ProjectPM from "../models/ProjectPM"
 import SchedulePur from "../models/SchedulePur"
 import SchedulePurLine from "../models/SchedulePurLine"
+import { generateQrId } from "../utils/generateQrId"
 
 dotenv.config()
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! })
@@ -214,3 +215,172 @@ function detectEntities(
 
   return entities
 }
+
+export const getSmartAnswerWithWriteConversational = async (
+  question: string,
+  context: any = {},
+  confirm = false
+): Promise<{
+  reply: string;
+  context: any;
+  entities: { type: string; name: string }[];
+}> => {
+  try {
+    // 1. Detectar intención si no hay contexto
+    if (!context?.intent) {
+      // Ejemplo: crear cotización
+      if (/cotizaci[oó]n|cotizar|crear.*cotiz/i.test(question)) {
+        return {
+          reply: "Genial, para crear la cotización decime estos datos separados por coma: nombre, fecha, proveedor.",
+          context: { intent: "crear_cotizacion", step: 1 },
+          entities: [],
+        };
+      }
+      // ...otros intents
+      return {
+        reply: "¿Qué acción querés realizar? Por ejemplo: crear una cotización.",
+        context: {},
+        entities: [],
+      };
+    }
+
+    // 2. Si ya hay intención, pedir los datos que faltan
+    if (context.intent === "crear_cotizacion" && context.step === 1) {
+      const [nombre, fecha, proveedor] = question.split(",");
+      if (!nombre || !fecha || !proveedor) {
+        return {
+          reply: "Faltan datos. Por favor decime: nombre, fecha, proveedor.",
+          context,
+          entities: [],
+        };
+      }
+      // Aquí podrías crear la cotización en la base de datos...
+      // Simulación:
+      return {
+        reply: `¡Listo! Se creó la cotización "${nombre.trim()}" para el proveedor ${proveedor.trim()} con fecha ${fecha.trim()}.`,
+        context: {},
+        entities: [
+          { type: "QuoteRequest", name: nombre.trim() },
+          { type: "Vendor", name: proveedor.trim() },
+        ],
+      };
+    }
+
+    // ...otros flujos conversacionales
+    return {
+      reply: "No entendí la acción. ¿Podés reformular?",
+      context,
+      entities: [],
+    };
+  } catch (err: any) {
+    console.error("❌ Error en getSmartAnswerWithWriteConversational:", err);
+    return {
+      reply: "Error interno en el agente conversacional.",
+      context,
+      entities: [],
+    };
+  }
+};
+
+export const getSmartAnswerWithWriteUnified = async (
+  question: string,
+  context: any = {},
+  confirm = false
+): Promise<{
+  reply: string;
+  context: any;
+  entities: { type: string; name: string }[];
+}> => {
+  try {
+    // 1. Detectar intención si no hay contexto
+    if (!context?.intent) {
+      // Ejemplo: crear cotización
+      if (/cotizaci[oó]n|cotizar|crear.*cotiz/i.test(question)) {
+        return {
+          reply: "Genial, para crear la cotización decime estos datos separados por coma: nombre, fecha, proveedor.",
+          context: { intent: "crear_cotizacion", step: 1 },
+          entities: [],
+        };
+      }
+      // Eliminar cotización conversacional
+      if (/eliminar|borrar.*cotizaci[oó]n/i.test(question)) {
+        return {
+          reply: "Decime el qr_id de la cotización que querés eliminar.",
+          context: { intent: "eliminar_cotizacion", step: 1 },
+          entities: [],
+        };
+      }
+      // ...otros intents
+      // Fallback: usar el flujo original para lectura/escritura
+      const { answer, entities } = await getSmartAnswerWithWrite(question, confirm);
+      return { reply: answer, context: {}, entities };
+    }
+
+    // 2. Si ya hay intención, pedir los datos que faltan
+    if (context.intent === "crear_cotizacion" && context.step === 1) {
+      const [nombre, fecha, proveedor] = question.split(",");
+      if (!nombre || !fecha || !proveedor) {
+        return {
+          reply: "Faltan datos. Por favor decime: nombre, fecha, proveedor.",
+          context,
+          entities: [],
+        };
+      }
+      // Crear la cotización en la base de datos
+      const qr_id = await generateQrId();
+      const newQuote = await QuoteRequest.create({
+        qr_id,
+        vendor_id: proveedor.trim(),
+        date: new Date(fecha.trim()),
+        reference: nombre.trim(),
+      });
+      return {
+        reply: `¡Listo! Se creó la cotización "${nombre.trim()}" para el proveedor ${proveedor.trim()} con fecha ${fecha.trim()} (qr_id: ${qr_id}).`,
+        context: {},
+        entities: [
+          { type: "QuoteRequest", name: nombre.trim() },
+          { type: "Vendor", name: proveedor.trim() },
+        ],
+      };
+    }
+
+    // Eliminar cotización
+    if (context.intent === "eliminar_cotizacion" && context.step === 1) {
+      const qr_id = question.trim();
+      if (!qr_id) {
+        return {
+          reply: "Falta el qr_id. Decímelo por favor.",
+          context,
+          entities: [],
+        };
+      }
+      const deleted = await QuoteRequest.findOneAndDelete({ qr_id });
+      if (!deleted) {
+        return {
+          reply: `No se encontró ninguna cotización con qr_id ${qr_id} para eliminar.`,
+          context: {},
+          entities: [],
+        };
+      }
+      return {
+        reply: `Cotización con qr_id ${qr_id} eliminada correctamente.`,
+        context: {},
+        entities: [{ type: "QuoteRequest", name: qr_id }],
+      };
+    }
+
+    // ...otros flujos conversacionales
+    return {
+      reply: "No entendí la acción. ¿Podés reformular?",
+      context,
+      entities: [],
+    };
+  } catch (err: any) {
+    console.error("❌ Error en getSmartAnswerWithWriteUnified:", err);
+    return {
+      reply: "Error interno en el agente conversacional.",
+      context,
+      entities: [],
+    };
+  }
+};

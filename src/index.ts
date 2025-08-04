@@ -58,6 +58,7 @@ app.use("/api/schedule-lines", schedulePurLineRoutes);
 app.use("/api", agentRoutes);
 app.use("/api", quoteRequestRoutes);
 app.use("/api", vendorRoutes);
+app.use('/ask', agentRoutes);
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);

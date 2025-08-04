@@ -11,28 +11,37 @@ export const generateQuoteRequests = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "No se recibieron líneas válidas." });
     }
 
-    const vendorGroups: { [key: string]: any[] } = {};
+    const vendorGroups: { [vendor_id: string]: any[] } = {};
+    const processedKeys = new Set<string>(); // Evita duplicados en este mismo POST
 
     for (const line of selectedLines as any[]) {
       for (const vendor of (line.vendor_list || []) as string[]) {
-        // Verificamos si ya existe una QuoteRequestLine para esta línea y proveedor
-        const existingLine = await QuoteRequestLine.findOne({
-          cc_id: line.cc_id,
-          cc_id_line: line.line_no,
-          qr_id: { $exists: true }
-        });
+        const uniqueKey = `${line.cc_id}-${line.line_no}-${vendor}`;
+        if (processedKeys.has(uniqueKey)) {
+          console.log(`⚠️ Línea ${line.line_no} para proveedor ${vendor} ya procesada en este request`);
+          continue;
+        }
 
-        if (existingLine) {
-          // Buscar la QuoteRequest correspondiente y comparar vendor_id
-          const qr = await QuoteRequest.findOne({ qr_id: existingLine.qr_id, vendor_id: vendor });
-          if (qr) {
-            console.log(`🔁 Ya existe una quote para línea ${line.line_no} y proveedor ${vendor}`);
-            continue; // Salteamos si ya existe
-          }
+        // Verificar en DB si ya existe
+        const existing = await QuoteRequestLine.findOne({
+          cc_id: line.cc_id,
+          cc_id_line: line.line_no
+        })
+          .populate({
+            path: "qr_id",
+            match: { vendor_id: vendor },
+            model: QuoteRequest
+          });
+
+        if (existing?.qr_id) {
+          console.log(`🔁 Ya existe una quote para línea ${line.line_no} y proveedor ${vendor}`);
+          continue;
         }
 
         if (!vendorGroups[vendor]) vendorGroups[vendor] = [];
         vendorGroups[vendor].push(line);
+
+        processedKeys.add(uniqueKey);
       }
     }
 
@@ -45,34 +54,38 @@ export const generateQuoteRequests = async (req: Request, res: Response) => {
         qr_id,
         vendor_id,
         date: new Date(),
-        reference: "Generado desde selección de líneas",
+        reference: "Generado desde selección de líneas"
       });
 
       const qrLines = await Promise.all(
-        lines.map((line: any, index: number) =>
-          QuoteRequestLine.create({
-            qr_id,
-            line_no: index + 1,
-            qty: line.qty,
-            um: line.um,
-            product_id: line.product_id,
-            reference: line.reference,
-            reference_price: line.reference_price,
-            currency: line.currency || "usd",
-            desired_date: line.desired_date,
-            cc_id: line.cc_id,
-            cc_id_line: line.line_no,
-            status: "waiting",
-          })
-        )
-      );
+  lines.map((line: any, index: number) => {
+    if (!line.product_id) {
+      throw new Error(`Falta product_id en la línea ${line.line_no} (cc_id: ${line.cc_id})`);
+    }
+    return QuoteRequestLine.create({
+      qr_id,
+      line_no: index + 1,
+      qty: line.qty,
+      um: line.um,
+      product_id: line.product_id,
+      reference: line.reference,
+      reference_price: line.reference_price,
+      currency: line.currency || "usd",
+      desired_date: line.desired_date,
+      cc_id: line.cc_id,
+      cc_id_line: line.line_no,
+      status: "waiting"
+    });
+  })
+);
+
 
       result.push({ qr_id, vendor_id, lines: qrLines });
     }
 
     return res.status(201).json({
       message: "Quote Requests generadas correctamente.",
-      result,
+      result
     });
   } catch (error: any) {
     console.error("❌ Error generando quotes:");
@@ -82,10 +95,11 @@ export const generateQuoteRequests = async (req: Request, res: Response) => {
 
     return res.status(500).json({
       message: "Error interno al generar cotizaciones.",
-      detalle: error?.message,
+      detalle: error?.message
     });
   }
 };
+
 
 // GET /api/quote-request
 export const getAllQuoteRequests = async (req: Request, res: Response) => {

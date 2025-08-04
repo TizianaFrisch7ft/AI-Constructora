@@ -3,6 +3,7 @@ import {
   handleAsk,
   handleSmartAsk,
   handleSmartAskWithWrite,
+  handleSmartTransactional
 } from "../controllers/agentControllers";
 import { sendReminder } from "../controllers/sendReminderController";
 
@@ -16,6 +17,8 @@ router.post("/ask/smart", handleSmartAsk);
 
 // ✍️ Escritura inteligente con confirmación opcional
 router.post("/ask/smart-write", handleSmartAskWithWrite);
+// Conversational transactional agent (unificado)
+router.post("/ask/smart-transactional", handleSmartTransactional);
 
 router.post("/send-reminder", sendReminder);
 

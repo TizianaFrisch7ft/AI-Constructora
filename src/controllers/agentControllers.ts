@@ -3,9 +3,10 @@ import { getMongoQuery, getNaturalAnswer } from "../services/openaiService";
 import { executeDynamicQuery } from "../services/mongoReadService";
 import { getSmartAnswer } from "../services/smartAnswerService";
 import { getSmartAnswerWithWrite } from "../services/getSmartAnswerSmartWrite"; // ✅ nuevo
+import { getSmartAnswerWithWriteUnified } from "../services/getSmartAnswerSmartWrite";
 
-/** Verifica si hay datos reales en la respuesta */
-const hasData = (d: any): boolean => {
+ /** Verifica si hay datos reales en la respuesta */
+ const hasData = (d: any): boolean => {
   if (Array.isArray(d)) return d.some(hasData);
   if (d && typeof d === "object") return Object.keys(d).length > 0;
   return !!d;
@@ -125,5 +126,23 @@ export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
     return res.status(500).json({
       error: err.message || "Error interno del servidor.",
     });
+  }
+};
+
+export const handleSmartTransactional = async (req: Request, res: Response) => {
+  console.log("[handleSmartTransactional] POST /ask/smart-transactional called");
+  console.log("Body:", req.body);
+  const { message, context, confirm } = req.body;
+  if (!message || typeof message !== "string" || message.trim() === "") {
+    console.warn("[handleSmartTransactional] Falta el mensaje válido");
+    return res.status(400).json({ error: "Falta el mensaje válido." });
+  }
+  try {
+    const result = await getSmartAnswerWithWriteUnified(message, context, confirm);
+    console.log("[handleSmartTransactional] Respuesta:", result);
+    return res.json(result);
+  } catch (err: any) {
+    console.error("❌ Error en /smart-transactional:", err);
+    return res.status(500).json({ error: err.message || "Error interno del servidor." });
   }
 };
