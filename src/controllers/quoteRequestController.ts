@@ -1,3 +1,4 @@
+// src/controllers/quoteRequestController.ts
 import { Request, Response } from "express";
 import QuoteRequest from "../models/QuoteRequest";
 import QuoteRequestLine from "../models/QuoteRequestLine";
@@ -5,38 +6,58 @@ import { generateQrId } from "../utils/generateQrId";
 
 export const generateQuoteRequests = async (req: Request, res: Response) => {
   try {
-    const { selectedLines } = req.body;
+    let { selectedLines } = req.body;
 
     if (!Array.isArray(selectedLines) || selectedLines.length === 0) {
-      return res.status(400).json({ message: "No se recibieron líneas válidas." });
+      return res.status(400).json({
+        success: false,
+        message: "No se recibieron líneas válidas."
+      });
     }
 
+    // Normalizamos datos mínimos para cada línea
+    selectedLines = selectedLines.map((line: any) => {
+      const product_id = line.product_id
+        ? String(line.product_id).trim()
+        : (line.reference || `ITEM_${line.line_no}`).toUpperCase().replace(/\s+/g, "_");
+
+      const vendor_list = Array.isArray(line.vendor_list) ? line.vendor_list : [];
+
+      return { ...line, product_id, vendor_list };
+    });
+
     const vendorGroups: { [vendor_id: string]: any[] } = {};
-    const processedKeys = new Set<string>(); // Evita duplicados en este mismo POST
+    const processedKeys = new Set<string>();
 
-    for (const line of selectedLines as any[]) {
-      for (const vendor of (line.vendor_list || []) as string[]) {
+    for (const line of selectedLines) {
+      for (const vendor of line.vendor_list) {
         const uniqueKey = `${line.cc_id}-${line.line_no}-${vendor}`;
-        if (processedKeys.has(uniqueKey)) {
-          console.log(`⚠️ Línea ${line.line_no} para proveedor ${vendor} ya procesada en este request`);
-          continue;
-        }
+        if (processedKeys.has(uniqueKey)) continue;
 
-        // Verificar en DB si ya existe
-        const existing = await QuoteRequestLine.findOne({
+        // Evitamos duplicados ya existentes en DB
+        // Primero buscamos todas las líneas que coincidan con cc_id y cc_id_line
+        const existingLines = await QuoteRequestLine.find({
           cc_id: line.cc_id,
           cc_id_line: line.line_no
-        })
-          .populate({
-            path: "qr_id",
-            match: { vendor_id: vendor },
-            model: QuoteRequest
-          });
-
-        if (existing?.qr_id) {
-          console.log(`🔁 Ya existe una quote para línea ${line.line_no} y proveedor ${vendor}`);
-          continue;
+        });
+        
+        // Luego verificamos si alguna de esas líneas pertenece a una cotización para este vendor
+        let isDuplicate = false;
+        if (existingLines.length > 0) {
+          for (const existingLine of existingLines) {
+            // Buscamos la cotización usando el qr_id (string)
+            const quote = await QuoteRequest.findOne({ 
+              qr_id: existingLine.qr_id, 
+              vendor_id: vendor 
+            });
+            if (quote) {
+              isDuplicate = true;
+              break;
+            }
+          }
         }
+        
+        if (isDuplicate) continue;
 
         if (!vendorGroups[vendor]) vendorGroups[vendor] = [];
         vendorGroups[vendor].push(line);
@@ -48,52 +69,57 @@ export const generateQuoteRequests = async (req: Request, res: Response) => {
     const result = [];
 
     for (const [vendor_id, lines] of Object.entries(vendorGroups)) {
-      const qr_id = await generateQrId();
+      // Generar código humano
+      const qr_code = await generateQrId();
 
-      await QuoteRequest.create({
-        qr_id,
+      // Crear la QuoteRequest en DB
+      const newQR = await QuoteRequest.create({
+        qr_id: qr_code,
         vendor_id,
         date: new Date(),
         reference: "Generado desde selección de líneas"
       });
 
+      // Crear líneas
       const qrLines = await Promise.all(
-  lines.map((line: any, index: number) => {
-    if (!line.product_id) {
-      throw new Error(`Falta product_id en la línea ${line.line_no} (cc_id: ${line.cc_id})`);
+        lines.map((line: any, index: number) =>
+          QuoteRequestLine.create({
+            qr_id: qr_code, // Usar el código humano legible en lugar del ObjectId
+            line_no: index + 1,
+            qty: line.qty,
+            um: line.um,
+            product_id: line.product_id,
+            reference: line.reference,
+            reference_price: line.reference_price,
+            currency: line.currency || "usd",
+            desired_date: line.desired_date,
+            cc_id: line.cc_id,
+            cc_id_line: line.line_no,
+            status: "waiting"
+          })
+        )
+      );
+
+      result.push({ qr_id: qr_code, vendor_id, lines: qrLines });
     }
-    return QuoteRequestLine.create({
-      qr_id,
-      line_no: index + 1,
-      qty: line.qty,
-      um: line.um,
-      product_id: line.product_id,
-      reference: line.reference,
-      reference_price: line.reference_price,
-      currency: line.currency || "usd",
-      desired_date: line.desired_date,
-      cc_id: line.cc_id,
-      cc_id_line: line.line_no,
-      status: "waiting"
-    });
-  })
-);
 
-
-      result.push({ qr_id, vendor_id, lines: qrLines });
+    if (result.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No se crearon cotizaciones. Revisa vendors y líneas válidas."
+      });
     }
 
     return res.status(201).json({
-      message: "Quote Requests generadas correctamente.",
+      success: true,
+      message: `${result.length} cotización(es) generadas correctamente.`,
       result
     });
-  } catch (error: any) {
-    console.error("❌ Error generando quotes:");
-    console.error("📌 Mensaje:", error?.message);
-    console.error("📌 Stack:", error?.stack);
-    console.error("📌 Body recibido:", req.body);
 
+  } catch (error: any) {
+    console.error("❌ Error generando quotes:", error);
     return res.status(500).json({
+      success: false,
       message: "Error interno al generar cotizaciones.",
       detalle: error?.message
     });

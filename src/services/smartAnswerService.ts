@@ -25,17 +25,9 @@ export interface SmartEntity {
   email?: string;
 }
 
-export const getSmartAnswer = async (
-  question: string
-): Promise<{
-  answer: string;
-  entities: SmartEntity[];
-  offerReminder?: boolean;
-  reminderRecipients?: { name: string; email: string }[];
-  rfqId?: string | null;
-}> => {
+export const getSmartAnswer = async (question: string) => {
   try {
-    // 1) Cargo todos los datos
+    // 1) Cargo datos desde Mongo
     const [
       vendors,
       projects,
@@ -51,7 +43,7 @@ export const getSmartAnswer = async (
     ] = await Promise.all([
       Vendor.find().lean(),
       Project.find().lean(),
-      QuoteRequest.find().lean(),      // <-- aquí llegan los RFQs sin pm_id ni status
+      QuoteRequest.find().lean(),
       QuoteRequestLine.find().lean(),
       Eval.find().lean(),
       EvalLine.find().lean(),
@@ -62,10 +54,62 @@ export const getSmartAnswer = async (
       SchedulePurLine.find().lean(),
     ]);
 
-    // Chapuza de tipo para poder leer pm_id y status
     const quotes = quotesRaw as Array<any>;
 
-    // 2) Llamada a OpenAI
+    // 2) Inicializo variables
+    let linesToQuote: any[] = [];
+    let offerQuoteCreation = false;
+
+    // 3) Detecto si es pregunta de necesidades no cotizables
+    const needsQuoteRegex = /\b(no\s+cotizad[ao]s?|sin\s+cotizar|sin\s+cotizaci[oó]n(?:es)?|no\s+tienen\s+(?:una\s+)?cotizaci[oó]n(?:es)?|necesidades\s+sin\s+cotizar|pendientes\s+de\s+cotizar)\b/i;
+    const isAskingForNeeds =
+      needsQuoteRegex.test(question) ||
+      question.toLowerCase().includes("necesidades");
+
+    if (isAskingForNeeds) {
+      // --- Tu lógica de filtrado ---
+      const dateMatch = /(\d{2}\/\d{2}\/\d{4})/.exec(question);
+      const parsedCutoff = dateMatch
+        ? new Date(dateMatch[1].split("/").reverse().join("-"))
+        : null;
+
+      const projectRegex = /\b(?:proyecto|obra|project)\s+([P][0-9]{4})\b/i;
+      const projectMatch = projectRegex.exec(question);
+      const projectId = projectMatch ? projectMatch[1] : null;
+
+      const scheduleRegex = /\b(?:cronograma|schedule|cc)\s+([C][C][0-9]{4})\b/i;
+      const scheduleMatch = scheduleRegex.exec(question);
+      const scheduleId = scheduleMatch ? scheduleMatch[1] : null;
+
+      const quotedLineKeys = new Set(
+        quoteLines.map((q) => `${q.cc_id}_${q.cc_id_line}`)
+      );
+
+      linesToQuote = scheduleLines.filter((line) => {
+        const lineKey = `${line.cc_id}_${line.line_no}`;
+        const notQuoted = !quotedLineKeys.has(lineKey);
+
+        const dateOK = parsedCutoff
+          ? !!line.desired_date && new Date(line.desired_date) <= parsedCutoff
+          : true;
+
+        const projectOK = projectId
+          ? line.project_id === projectId
+          : true;
+
+        const scheduleOK = scheduleId
+          ? line.cc_id === scheduleId
+          : true;
+
+        return notQuoted && dateOK && projectOK && scheduleOK;
+      });
+
+      if (linesToQuote.length > 0) {
+        offerQuoteCreation = true;
+      }
+    }
+
+    // 4) Preparo el prompt según el caso
     const context = {
       vendors,
       projects,
@@ -79,9 +123,38 @@ export const getSmartAnswer = async (
       schedules,
       scheduleLines,
     };
-    const systemPrompt = `Sos un experto en gestión de compras y proyectos. Tenés acceso a los datos internos en JSON. Contestá en español, con precisión, sin inventar nada.`;
-    const userPrompt = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
 
+function formatLinesForPrompt(lines: any[]): string {
+  return lines.map((l, idx) => {
+    return `• ${l.reference || 'Sin referencia'}
+  Cantidad: ${l.qty || '-'} ${l.um || ''}
+  Precio de referencia: ${l.reference_price || '-'} USD
+  Proyecto: ${l.project_id || '-'}
+  Fecha deseada: ${l.desired_date ? new Date(l.desired_date).toLocaleDateString('es-AR') : '-'}
+  Proveedores: ${(l.vendor_list || []).join(', ') || '-'}`;
+  }).join('\n\n');
+}
+
+
+    const systemPrompt = `
+Sos un experto en gestión de compras y proyectos.
+Tenés acceso a datos internos en formato JSON.
+
+REGLAS:
+1. Si la pregunta es sobre necesidades no cotizables, usa exactamente la lista "linesToQuote" que te proporciona el sistema. 
+2. No inventes ni elimines elementos. 
+3. Si "linesToQuote" está vacío, responde: "No hay necesidades no cotizadas para el criterio solicitado".
+4. Podés formatear la presentación, pero el set de datos debe ser idéntico.
+5. Si la pregunta no es sobre necesidades, usá "context" para responder normalmente.
+6. Siempre respondé en español claro y profesional.
+`;
+
+   const userPrompt = isAskingForNeeds
+  ? `Estas son las necesidades no cotizadas calculadas por el sistema. No agregues ni quites nada, solo preséntalas en texto claro y profesional, sin usar formato JSON:\n${formatLinesForPrompt(linesToQuote)}`
+  : `Datos: ${JSON.stringify(context)}\nPregunta: ${question}`;
+
+
+    // 5) Llamo a OpenAI
     const chat = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
       .chat.completions.create({
         model: "gpt-4o",
@@ -92,10 +165,11 @@ export const getSmartAnswer = async (
         temperature: 0.3,
       });
 
-    const answer = chat.choices[0].message.content?.trim() || "No se pudo generar respuesta.";
+    const answer =
+      chat.choices[0].message.content?.trim() || "No se pudo generar respuesta.";
 
-    // 3) Detección de entidades (idéntico)
-    const allEntities = detectEntities(answer, {
+    // 6) Detecto entidades
+    const entities = detectEntities(answer, {
       Vendor: vendors,
       Project: projects,
       QuoteRequest: quotesRaw,
@@ -107,60 +181,14 @@ export const getSmartAnswer = async (
       ProjectPM: projectPMs,
       SchedulePur: schedules,
       SchedulePurLine: scheduleLines,
-    });
-    const allowedTypes = ["Vendor", "Project", "PM", "QuoteRequest", "SchedulePur"];
-    const entities = allEntities.filter((e) => allowedTypes.includes(e.type));
+    }).filter((e) => ["Vendor", "Project", "PM", "QuoteRequest", "SchedulePur"].includes(e.type));
 
-    // 4) Lógica de recordatorios
-    const pmReminderRegex =
-      /(?=.*\b(?:pm|project\s*manager)\b)(?=.*\b(?:cotiz|cotización|quote|rfq)\b)/i;
-    let offerReminder = false;
-    let reminderRecipients: { name: string; email: string }[] = [];
-
-    if (pmReminderRegex.test(question)) {
-      // tomamos TODOS los PMs con email e id detectado
-      const pmEntities = entities.filter((e) => e.type === "PM" && e.email && e.id);
-
-      // Agrupar statuses (usando el any) por pm_id
-      const pmRFQMap: Record<string, string[]> = {};
-      for (const q of quotes) {
-        const pmId = String((q as any).pm_id || "");
-        const status = String((q as any).status || "").toLowerCase();
-        if (!pmRFQMap[pmId]) pmRFQMap[pmId] = [];
-        pmRFQMap[pmId].push(status);
-      }
-
-      // Determinar incumplidores
-      const pmsIncumplidores = new Set<string>();
-      for (const [pmId, statuses] of Object.entries(pmRFQMap)) {
-        const allCompleted = statuses.every((s) =>
-          ["completed", "done"].includes(s)
-        );
-        if (!allCompleted) {
-          pmsIncumplidores.add(pmId);
-        }
-      }
-
-      // Filtrar solo los PMs incumplidore
-      reminderRecipients = pmEntities
-        .filter((pm) => pm.id && pmsIncumplidores.has(pm.id))
-        .map((pm) => ({ name: pm.name, email: pm.email! }));
-
-      offerReminder = reminderRecipients.length > 0;
-    }
-
-    // Tomamos el primer RFQ pendiente para el primer reminderRecipient
-    const rfq = quotes.find((q) =>
-      reminderRecipients.some((r) =>
-        String((q as any).rfq_id || (q as any).qr_id || "")
-          .toLowerCase()
-          .includes(r.name.toLowerCase().split(" ")[0])
-      ) &&
-      String((q as any).status || "").toLowerCase() !== "completed"
-    );
-    const rfqId = rfq ? String((rfq as any)._id) : null;
-
-    return { answer, entities, offerReminder, reminderRecipients, rfqId };
+    return {
+      answer,
+      entities,
+      offerQuoteCreation,
+      linesToQuote,
+    };
   } catch (err: any) {
     console.error("❌ Error en getSmartAnswer:", err);
     throw new Error("Error generando la respuesta inteligente.");
@@ -205,7 +233,7 @@ function detectEntities(
           } else if (type === "PM") {
             result.push({
               type,
-              id: String(item._id),              // <–– asigna aquí el _id
+              id: String(item._id),
               name: `${item.name}${item.surname ? ` ${item.surname}` : ""}`,
               surname: item.surname,
               email: item.email,
@@ -218,6 +246,5 @@ function detectEntities(
       }
     }
   }
-
   return result;
 }
