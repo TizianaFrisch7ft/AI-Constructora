@@ -66,22 +66,89 @@ export const getSmartAnswer = async (
 
     const quotes = quotesRaw as Array<any>;
 
+    // 5) Lógica para detectar "necesidades no cotizadas" (ANTES de OpenAI)
+    let offerQuoteCreation = false;
+    let linesToQuote: any[] = [];
+
+    const needsQuoteRegex = /\b(no\s+cotizad[ao]s?|sin\s+cotizar|sin\s+cotizaci[oó]n(?:es)?|no\s+tienen\s+(?:una\s+)?cotizaci[oó]n(?:es)?(?:\s+asociad[ao]s?)?|no\s+cuentan\s+con\s+cotizaci[oó]n(?:es)?|a[uú]n\s+no\s+han\s+sido\s+cotizad[ao]s?|necesidades\s+sin\s+cotizar|falt(?:a|ante)s?\s+(?:de\s+)?cotiz[ao]r|pendientes\s+(?:de\s+)?cotiz[ao]r)\b/i;
+
+    if (needsQuoteRegex.test(question)) {
+      // Detectar fecha de corte en la pregunta
+      const dateMatch = /(\d{2}\/\d{2}\/\d{4})/.exec(question);
+      const parsedCutoff = dateMatch
+        ? new Date(dateMatch[1].split("/").reverse().join("-"))
+        : null;
+        
+      // Detectar proyectos mencionados directamente en la pregunta
+      const projectRegex = /\b(?:proyecto|obra|project)\s+([P][0-9]{4})\b/i;
+      const projectMatch = projectRegex.exec(question);
+      const projectId = projectMatch ? projectMatch[1] : null;
+      
+      // Detectar cronogramas mencionados directamente en la pregunta
+      const scheduleRegex = /\b(?:cronograma|schedule|cc)\s+([C][C][0-9]{4})\b/i;
+      const scheduleMatch = scheduleRegex.exec(question);
+      const scheduleId = scheduleMatch ? scheduleMatch[1] : null;
+
+      const quotedLineKeys = new Set(
+        quoteLines.map((q) => `${q.cc_id}_${q.cc_id_line}`)
+      );
+
+      linesToQuote = scheduleLines.filter((line) => {
+        const lineKey = `${line.cc_id}_${line.line_no}`;
+        
+        // Criterio 1: No debe estar ya cotizada
+        const notQuoted = !quotedLineKeys.has(lineKey);
+        
+        // Criterio 2: Debe cumplir con la fecha de corte si se especificó
+        const dateOK = parsedCutoff
+          ? !!line.desired_date && new Date(line.desired_date) <= parsedCutoff
+          : true;
+        
+        return notQuoted && dateOK;
+      }).map((line) => ({
+        ...line,
+        vendor_id:
+          Array.isArray(line.vendor_list) && line.vendor_list.length > 0
+            ? line.vendor_list[0]
+            : null
+      }));
+
+      if (linesToQuote.length > 0) {
+        offerQuoteCreation = true;
+      }
+    }
+
     // 2) Llamada a OpenAI
     const context = {
-      vendors,
-      projects,
-      quotes,
-      quoteLines,
-      evals,
-      evalLines,
-      projectVendors,
-      pms,
-      projectPMs,
-      schedules,
-      scheduleLines,
-    };
+  vendors,
+  projects,
+  quotes,
+  quoteLines,
+  evals,
+  evalLines,
+  projectVendors,
+  pms,
+  projectPMs,
+  schedules,
+  scheduleLines: linesToQuote // 🔹 solo las líneas sin cotizar
+};
+
     const systemPrompt = `Sos un experto en gestión de compras y proyectos. Tenés acceso a los datos internos en JSON. Contestá en español, con precisión, sin inventar nada.`;
-    const userPrompt = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
+    
+    let userPrompt = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
+    
+    if (linesToQuote.length > 0) {
+      userPrompt = `
+Datos: ${JSON.stringify(context)}
+
+Líneas sin cotizar detectadas (para que las menciones exactamente como están):
+${linesToQuote.map(l => `• Línea ${l.line_no} del cronograma ${l.cc_id} (proyecto ${l.project_id || 'N/A'})`).join("\n")}
+
+Pregunta: ${question}
+
+IMPORTANTE: Cuando hables de "líneas sin cotizar" solo menciona las que están en la lista anterior.
+`;
+    }
 
     const chat = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
       .chat.completions.create({
@@ -169,87 +236,6 @@ export const getSmartAnswer = async (
     );
     const rfqId = rfq ? String((rfq as any)._id) : null;
 
-    // 5) Lógica para detectar "necesidades no cotizadas"
-    let offerQuoteCreation = false;
-    let linesToQuote: any[] = [];
-
-    // Ampliamos las frases que disparan la lógica
-    const needsQuoteRegex = /\b(no\s+cotizad[ao]s?|sin\s+cotizar|sin\s+cotizaci[oó]n(?:es)?|no\s+tienen\s+(?:una\s+)?cotizaci[oó]n(?:es)?(?:\s+asociad[ao]s?)?|no\s+cuentan\s+con\s+cotizaci[oó]n(?:es)?|a[uú]n\s+no\s+han\s+sido\s+cotizad[ao]s?|necesidades\s+sin\s+cotizar|falt(?:a|ante)s?\s+(?:de\s+)?cotiz[ao]r|pendientes\s+(?:de\s+)?cotiz[ao]r)\b/i;
-
-    if (needsQuoteRegex.test(question) || needsQuoteRegex.test(answer)) {
-      // Detectar fecha de corte en la pregunta
-      const dateMatch = /(\d{2}\/\d{2}\/\d{4})/.exec(question);
-      const parsedCutoff = dateMatch
-        ? new Date(dateMatch[1].split("/").reverse().join("-"))
-        : null;
-        
-      // Detectar proyectos mencionados directamente en la pregunta
-      const projectRegex = /\b(?:proyecto|obra|project)\s+([P][0-9]{4})\b/i;
-      const projectMatch = projectRegex.exec(question);
-      const projectId = projectMatch ? projectMatch[1] : null;
-      
-      // Detectar cronogramas mencionados directamente en la pregunta
-      const scheduleRegex = /\b(?:cronograma|schedule|cc)\s+([C][C][0-9]{4})\b/i;
-      const scheduleMatch = scheduleRegex.exec(question);
-      const scheduleId = scheduleMatch ? scheduleMatch[1] : null;
-
-      const quotedLineKeys = new Set(
-        quoteLines.map((q) => `${q.cc_id}_${q.cc_id_line}`)
-      );
-
-      // Detectar proyectos mencionados en la pregunta o respuesta
-      const projectEntities = entities.filter(e => e.type === "Project");
-      const projectMentioned = projectEntities.length > 0 || projectId !== null;
-      
-      // Detectar cronogramas mencionados en la pregunta o respuesta
-      const schedulePurEntities = entities.filter(e => e.type === "SchedulePur");
-      const scheduleMentioned = schedulePurEntities.length > 0 || scheduleId !== null;
-
-      linesToQuote = scheduleLines.filter((line) => {
-        const lineKey = `${line.cc_id}_${line.line_no}`;
-        
-        // Criterio 1: No debe estar ya cotizada
-        const notQuoted = !quotedLineKeys.has(lineKey);
-        
-        // Criterio 2: Debe cumplir con la fecha de corte si se especificó
-        const dateOK = parsedCutoff
-          ? !!line.desired_date && new Date(line.desired_date) <= parsedCutoff
-          : true;
-        
-        // Criterio 3: Debe pertenecer al proyecto mencionado si se especificó
-        let projectOK = true;
-        if (projectMentioned) {
-          if (projectId) {
-            // Si se mencionó un ID de proyecto directamente
-            projectOK = line.project_id === projectId;
-          } else {
-            // Si se detectaron entidades de proyecto
-            projectOK = projectEntities.some(pe => line.project_id === pe.name || 
-                                      (typeof line.project_id === 'string' && line.project_id.includes(pe.name)));
-          }
-        }
-        
-        // Criterio 4: Debe pertenecer al cronograma mencionado si se especificó
-        let scheduleOK = true;
-        if (scheduleMentioned) {
-          if (scheduleId) {
-            // Si se mencionó un ID de cronograma directamente
-            scheduleOK = line.cc_id === scheduleId;
-          } else {
-            // Si se detectaron entidades de cronograma
-            scheduleOK = schedulePurEntities.some(se => line.cc_id === se.name || 
-                                          (typeof line.cc_id === 'string' && line.cc_id.includes(se.name)));
-          }
-        }
-        
-        return notQuoted && dateOK && projectOK && scheduleOK;
-      });
-
-      if (linesToQuote.length > 0) {
-        offerQuoteCreation = true;
-      }
-    }
-
     return {
       answer,
       entities,
@@ -257,7 +243,7 @@ export const getSmartAnswer = async (
       reminderRecipients,
       rfqId,
       offerQuoteCreation,
-      linesToQuote, // Esto lo mandás al frontend para pasarlo directo a generateQuoteRequests
+      linesToQuote,
     };
   } catch (err: any) {
     console.error("❌ Error en getSmartAnswer:", err);
@@ -319,3 +305,4 @@ function detectEntities(
 
   return result;
 }
+      
