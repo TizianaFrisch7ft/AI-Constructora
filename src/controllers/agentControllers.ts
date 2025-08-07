@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { getMongoQuery, getNaturalAnswer } from "../services/openaiService";
 import { executeDynamicQuery } from "../services/mongoReadService";
 import { getSmartAnswer } from "../services/smartAnswerService";
-import { getSmartAnswerWithWriteUnified } from "../services/getSmartAnswerSmartWrite";
+import { getSmartAnswerWithWrite } from "../services/getSmartAnswerSmartWrite";
 import { generateQuoteRequests } from "./quoteRequestController";
 
 /** Verifica si hay datos reales en la respuesta */
@@ -158,12 +158,12 @@ export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
 
   try {
     const cleanQuestion = question.trim();
-    const result = await getSmartAnswerWithWriteUnified(cleanQuestion, confirm);
+    const result = await getSmartAnswerWithWrite(cleanQuestion, confirm);
 
     return res.json({
       success: true,
       agent: "SmartAgent+Write",
-      answer: result.reply,
+      answer: result.answer,
       entities: result.entities || [],
     });
   } catch (err: any) {
@@ -185,7 +185,7 @@ export const handleSmartTransactional = async (req: Request, res: Response) => {
   }
 
   try {
-    const result = await getSmartAnswerWithWriteUnified(message, context, confirm);
+    const result = await getSmartAnswerWithWrite(message, confirm);
     console.log("[handleSmartTransactional] Respuesta:", result);
     return res.json(result);
   } catch (err: any) {
