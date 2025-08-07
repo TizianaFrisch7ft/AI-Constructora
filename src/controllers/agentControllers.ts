@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import { getMongoQuery, getNaturalAnswer } from "../services/openaiService";
 import { executeDynamicQuery } from "../services/mongoReadService";
 import { getSmartAnswer } from "../services/smartAnswerService";
-import { getSmartAnswerWithWrite } from "../services/getSmartAnswerSmartWrite";
 import { getSmartAnswerWithWriteUnified } from "../services/getSmartAnswerSmartWrite";
 import { generateQuoteRequests } from "./quoteRequestController";
 
@@ -159,12 +158,12 @@ export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
 
   try {
     const cleanQuestion = question.trim();
-    const result = await getSmartAnswerWithWrite(cleanQuestion, confirm);
+    const result = await getSmartAnswerWithWriteUnified(cleanQuestion, confirm);
 
     return res.json({
       success: true,
       agent: "SmartAgent+Write",
-      answer: result.answer,
+      answer: result.reply,
       entities: result.entities || [],
     });
   } catch (err: any) {

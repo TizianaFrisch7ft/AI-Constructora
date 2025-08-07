@@ -105,22 +105,13 @@ export const getSmartAnswer = async (
           : true;
         
         return notQuoted && dateOK;
-      }).map((line) => {
-        // Mapeo corregido del vendor
-        const vendorId = Array.isArray(line.vendor_list) && line.vendor_list.length > 0
-          ? line.vendor_list[0]
-          : null;
-        
-        const vendorName = vendorId
-          ? vendors.find((v) => String(v.id) === String(vendorId))?.name || null
-          : null;
-        
-        return {
-          ...line,
-          vendor_id: vendorId,
-          vendor_name: vendorName
-        };
-      });
+      }).map((line) => ({
+        ...line,
+        vendor_id:
+          Array.isArray(line.vendor_list) && line.vendor_list.length > 0
+            ? line.vendor_list[0]
+            : null
+      }));
 
       if (linesToQuote.length > 0) {
         offerQuoteCreation = true;
@@ -314,3 +305,4 @@ function detectEntities(
 
   return result;
 }
+      
