@@ -191,7 +191,8 @@ IMPORTANTE: Cuando hables de "líneas sin cotizar" solo menciona las que están 
 
     // 4) Lógica de recordatorios
     const pmReminderRegex =
-      /(?=.*\b(?:pm|project\s*manager)\b)(?=.*\b(?:cotiz|cotización|quote|rfq)\b)/i;
+  /(?=.*\b(?:pm|project\s*manager)\b)(?=.*\b(?:cotiz|cotización|quote|rfq necesidades|necesidad(?:es)?|entregaron|faltan|pendientes|no\s+presentaron|no\s+entregaron)\b)/i;
+
     let offerReminder = false;
     let reminderRecipients: { name: string; email: string }[] = [];
 
