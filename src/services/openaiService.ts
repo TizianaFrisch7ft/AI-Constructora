@@ -2,10 +2,11 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import dotenv from "dotenv";
-import { safeJSON } from "../utils/safeJSON"; // ajusta el path si es necesario
+import { safeJSON } from "../utils/safeJSON";
 import mongoose from "mongoose";
 
 dotenv.config();
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 /* ---------- Tipos de plan de lectura/escritura (EXISTENTES) ---------- */
@@ -56,10 +57,10 @@ export type WriteOp =
 export type CrudPlan =
   | {
       mode: "write";
-      operation: (WriteOp & {
+      operation: WriteOp & {
         requiresConfirmation?: boolean;
         naturalSummary?: string;
-      });
+      };
     }
   | {
       mode: "read";
@@ -93,17 +94,21 @@ const isComparisonRequest = (question: string): boolean => {
 /** META real desde Mongoose (colecciones, campos y alias) */
 function getModelMeta(): Record<string, { fields: string[]; aliases: Record<string, string> }> {
   const meta: Record<string, { fields: string[]; aliases: Record<string, string> }> = {};
-  for (const [name, model] of Object.entries(mongoose.models)) {
-   
-    const schema = (model as any).schema as mongoose.Schema;
-    const paths = Object.keys(schema?.paths || {});
+  const allModels = mongoose.models as Record<string, mongoose.Model<any>>;
+
+  for (const [name, model] of Object.entries(allModels)) {
+    const schema = (model as any)?.schema as mongoose.Schema | undefined;
+    const paths = Object.keys(schema?.paths ?? {});
     const aliases: Record<string, string> = {};
 
-    Object.values(schema?.paths || {}).forEach((p: any) => {
-      if (p?.options?.alias && typeof p.path === "string") {
-        aliases[p.options.alias as string] = p.path as string;
+    const schemaPaths = Object.values(schema?.paths ?? {}) as any[];
+    for (const p of schemaPaths) {
+      const alias = p?.options?.alias;
+      if (alias && typeof alias === "string" && typeof p.path === "string") {
+        aliases[alias] = p.path as string;
       }
-    });
+    }
+
     meta[name] = { fields: paths, aliases };
   }
   return meta;
@@ -156,7 +161,9 @@ const READ_PROMPT = (question: string) => `
 Sos un generador de consultas para MongoDB.
 Tu salida debe ser **EXCLUSIVAMENTE** un JSON válido (sin backticks ni texto extra).
 
-... aquí va el resto de tu prompt de lectura ...
+Reglas:
+- Devolvé un objeto JSON que represente un plan de lectura (find/aggregate/steps).
+- No incluyas comentarios ni texto fuera del JSON.
 
 Pregunta del usuario:
 "${question}"
@@ -166,13 +173,15 @@ const WRITE_PROMPT = (question: string) => `
 Sos un generador de planes de escritura para MongoDB.
 Tu única tarea es devolver un JSON válido con una instrucción de escritura.
 
-... aquí va el resto de tu prompt de escritura ...
+Reglas:
+- Devolvé un objeto JSON con action/collection y data|filter|update según corresponda.
+- No incluyas comentarios ni texto fuera del JSON.
 
 Consulta del usuario:
 "${question}"
 `;
 
-/* ---------- Funciones EXISTENTES (no se tocan) ---------- */
+/* ---------- Funciones EXISTENTES (no se tocan firmas) ---------- */
 export const getMongoQuery = async (question: string): Promise<ReadPlan> => {
   const resp = await openai.chat.completions.create({
     model: "gpt-3.5-turbo",
@@ -180,7 +189,7 @@ export const getMongoQuery = async (question: string): Promise<ReadPlan> => {
     top_p: 0,
     messages: [{ role: "user", content: READ_PROMPT(question) }],
   });
-  return safeJSON<ReadPlan>(resp.choices[0].message.content || "");
+  return safeJSON<ReadPlan>(resp.choices[0].message.content || "") ?? { steps: [] };
 };
 
 export const getMongoWriteOp = async (question: string): Promise<WriteOp> => {
@@ -190,7 +199,7 @@ export const getMongoWriteOp = async (question: string): Promise<WriteOp> => {
     top_p: 0,
     messages: [{ role: "user", content: WRITE_PROMPT(question) }],
   });
-  return safeJSON<WriteOp>(resp.choices[0].message.content || "");
+  return safeJSON<WriteOp>(resp.choices[0].message.content || "") ?? { action: "none" };
 };
 
 export const getNaturalAnswer = async (
@@ -207,12 +216,8 @@ export const getNaturalAnswer = async (
           content: `Datos JSON:\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``,
         },
       ]
-    : [
-        {
-          role: "system",
-          content: NATURAL_PROMPT(question, data),
-        },
-      ];
+    : [{ role: "system", content: NATURAL_PROMPT(question, data) }];
+
   const resp = await openai.chat.completions.create({
     model: "gpt-4o",
     temperature: 0,
@@ -290,15 +295,11 @@ Devolvé SOLO un JSON válido como se especifica (sin comentarios ni backticks).
   });
 
   const raw = resp.choices?.[0]?.message?.content?.trim() || `{"mode":"none"}`;
-  let plan: CrudPlan;
-  try {
-    plan = JSON.parse(raw) as CrudPlan;
-  } catch {
-    return { mode: "none" };
-  }
+  const plan = safeJSON<CrudPlan>(raw) ?? { mode: "none" };
 
-  const op: any = (plan as any).operation;
-  const coll: string | undefined = op?.collection || op?.list?.collection;
+  // Guardia: validar colección propuesta por el planner
+  const op: any = (plan as any).operation ?? {};
+  const coll: string | undefined = op?.collection ?? op?.list?.collection;
   if (plan.mode !== "none" && coll && !collections.includes(coll)) {
     return { mode: "none" };
   }

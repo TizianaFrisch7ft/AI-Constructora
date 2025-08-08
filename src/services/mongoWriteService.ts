@@ -4,7 +4,14 @@ import AuditLog from "../models/AuditLog";
 import { normalize, applyAliases, stripUnknownFields, models } from "./mongoShared";
 
 export interface WriteInput {
-  action: "insertOne" | "insertMany" | "updateOne" | "updateMany" | "deleteOne" | "deleteMany" | "none";
+  action:
+    | "insertOne"
+    | "insertMany"
+    | "updateOne"
+    | "updateMany"
+    | "deleteOne"
+    | "deleteMany"
+    | "none";
   collection?: string;
   data?: any;
   filter?: any;
@@ -17,7 +24,28 @@ type ExecOptions = {
   requireConfirm?: boolean; // bloquea *Many con filtro vacío
 };
 
-export const executeDynamicWrite = async (question: string, op: WriteInput, opt: ExecOptions = {}) => {
+// Resultado genérico para mantener compatibilidad
+export type ExecuteResult = {
+  ok: boolean;
+  action?: WriteInput["action"];
+  collection?: string;
+  // campos opcionales según acción
+  inserted?: any | any[];
+  before?: any[];
+  after?: any[] | null;
+  raw?: any;
+  dryRun?: boolean;
+  plan?: any;
+  confirmRequired?: boolean;
+  reason?: string;
+  message?: string;
+};
+
+export const executeDynamicWrite = async (
+  question: string,
+  op: WriteInput,
+  opt: ExecOptions = {}
+): Promise<ExecuteResult> => {
   if (!op || typeof op !== "object") throw new Error("La operación recibida es inválida.");
   if (op.action === "none") return { ok: false, message: "Acción 'none'." };
 
@@ -30,6 +58,8 @@ export const executeDynamicWrite = async (question: string, op: WriteInput, opt:
   }
 
   const key = normalize(op.collection);
+
+  // Aseguramos que models sea indexable por string
   const Model = (models as Record<string, mongoose.Model<any>>)[key];
   if (!Model) throw new Error(`No se encontró la colección: ${op.collection}`);
 
@@ -40,11 +70,12 @@ export const executeDynamicWrite = async (question: string, op: WriteInput, opt:
   if (isInsert && !op.data) throw new Error("Falta 'data' para inserción.");
   if ((isUpdate || isDelete) && !op.filter) throw new Error("Falta 'filter' para update/delete.");
 
-  let filter = applyAliases(key, op.filter ?? {});
-  filter = stripUnknownFields(key, filter);
+  // Forzamos a objeto plano para evitar unions raras
+  let filter: Record<string, any> = applyAliases(key, (op.filter ?? {}) as Record<string, any>);
+  filter = stripUnknownFields(key, filter) as Record<string, any>;
 
-  let update = op.update ?? {};
-  if (isUpdate) update = stripUnknownFields(key, update);
+  let update: Record<string, any> = (op.update ?? {}) as Record<string, any>;
+  if (isUpdate) update = stripUnknownFields(key, update) as Record<string, any>;
 
   let data: any = op.data ?? {};
   if (isInsert) {
@@ -75,63 +106,139 @@ export const executeDynamicWrite = async (question: string, op: WriteInput, opt:
     let raw: any;
 
     if (isInsert) {
-      raw = op.action === "insertOne"
-        ? (await (Model as any).create([data], { session }))[0]
-        : await (Model as any).insertMany(data, { session });
+      // insertOne: usamos create con array para session
+      if (op.action === "insertOne") {
+        const created = await (Model as mongoose.Model<any>)
+          .create([data], { session });
+        raw = created?.[0];
+      } else {
+        // insertMany
+        raw = await (Model as mongoose.Model<any>)
+          .insertMany(data, { session });
+      }
 
-      await (AuditLog as any).create([{
-        action: op.action,
-        coll: key,
-        filter: null,
-        payload: data,
-        options: op.options,
-        result: { ok: true, inserted: Array.isArray(raw) ? raw.length : 1 },
-        question,
-      }], { session });
+      await (AuditLog as mongoose.Model<any>).create(
+        [
+          {
+            action: op.action,
+            coll: key,
+            filter: null,
+            payload: data,
+            options: op.options,
+            result: { ok: true, inserted: Array.isArray(raw) ? raw.length : 1 },
+            question,
+          },
+        ],
+        { session }
+      );
 
       await session.commitTransaction();
-      return { ok: true, action: op.action, collection: key, inserted: raw };
+      return {
+        ok: true,
+        action: op.action,
+        collection: key,
+        inserted: raw,
+      };
     }
 
     if (isUpdate) {
-      const before = await (Model as any).find(filter).lean().session(session);
-      raw = op.action === "updateOne"
-        ? await (Model as any).updateOne(filter, update, op.options || {}).session(session)
-        : await (Model as any).updateMany(filter, update, op.options || {}).session(session);
-      const after = await (Model as any).find(filter).lean().session(session);
+      const before = await (Model as mongoose.Model<any>)
+        .find(filter)
+        .lean()
+        .session(session)
+        .exec();
 
-      await (AuditLog as any).create([{
-        action: op.action,
-        coll: key,
-        filter,
-        payload: update,
-        options: op.options,
-        result: { ok: true, matched: raw.matchedCount, modified: raw.modifiedCount },
-        question,
-      }], { session });
+      if (op.action === "updateOne") {
+        raw = await (Model as mongoose.Model<any>)
+          .updateOne(filter, update, op.options || {})
+          .session(session)
+          .exec();
+      } else {
+        raw = await (Model as mongoose.Model<any>)
+          .updateMany(filter, update, op.options || {})
+          .session(session)
+          .exec();
+      }
+
+      const after = await (Model as mongoose.Model<any>)
+        .find(filter)
+        .lean()
+        .session(session)
+        .exec();
+
+      await (AuditLog as mongoose.Model<any>).create(
+        [
+          {
+            action: op.action,
+            coll: key,
+            filter,
+            payload: update,
+            options: op.options,
+            result: {
+              ok: true,
+              matched: (raw as any)?.matchedCount,
+              modified: (raw as any)?.modifiedCount,
+            },
+            question,
+          },
+        ],
+        { session }
+      );
 
       await session.commitTransaction();
-      return { ok: true, action: op.action, collection: key, before, after, raw };
+      return {
+        ok: true,
+        action: op.action,
+        collection: key,
+        before,
+        after,
+        raw,
+      };
     }
 
     if (isDelete) {
-      const before = await (Model as any).find(filter).lean().session(session);
-      raw = op.action === "deleteOne"
-        ? await (Model as any).deleteOne(filter).session(session)
-        : await (Model as any).deleteMany(filter).session(session);
+      const before = await (Model as mongoose.Model<any>)
+        .find(filter)
+        .lean()
+        .session(session)
+        .exec();
 
-      await (AuditLog as any).create([{
-        action: op.action,
-        coll: key,
-        filter,
-        payload: null,
-        options: op.options,
-        result: { ok: true, deleted: raw.deletedCount },
-        question,
-      }], { session });
+      if (op.action === "deleteOne") {
+        raw = await (Model as mongoose.Model<any>)
+          .deleteOne(filter)
+          .session(session)
+          .exec();
+      } else {
+        raw = await (Model as mongoose.Model<any>)
+          .deleteMany(filter)
+          .session(session)
+          .exec();
+      }
+
+      await (AuditLog as mongoose.Model<any>).create(
+        [
+          {
+            action: op.action,
+            coll: key,
+            filter,
+            payload: null,
+            options: op.options,
+            result: { ok: true, deleted: (raw as any)?.deletedCount },
+            question,
+          },
+        ],
+        { session }
+      );
 
       await session.commitTransaction();
-      return { ok: true, action: op.action, collection: key, before, after: null, raw };
+      return {
+        ok: true,
+        action: op.action,
+        collection: key,
+        before,
+        after: null,
+        raw,
+      };
     }
 
     throw new Error("Acción no soportada: " + op.action);

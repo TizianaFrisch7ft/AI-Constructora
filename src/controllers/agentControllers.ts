@@ -1,3 +1,4 @@
+// src/controllers/askController.ts
 import { Request, Response } from "express";
 import { getMongoQuery, getNaturalAnswer } from "../services/openaiService";
 import { executeDynamicQuery } from "../services/mongoReadService";
@@ -5,7 +6,7 @@ import { getSmartAnswer } from "../services/smartAnswerService";
 import { getSmartAnswerWithWrite } from "../services/getSmartAnswerSmartWrite";
 import { generateQuoteRequests } from "./quoteRequestController";
 
-/** Verifica si hay datos reales en la respuesta */
+/** Verifica si hay datos reales en la respuesta (por si querés usarlo en el futuro) */
 const hasData = (d: any): boolean => {
   if (Array.isArray(d)) return d.some(hasData);
   if (d && typeof d === "object") return Object.keys(d).length > 0;
@@ -60,11 +61,12 @@ export const handleSmartAsk = async (req: Request, res: Response) => {
 
     const result: any = {
       answer,
-      entities,
+      entities,               // ⚠️ se envían tal cual (incluyen id + name si el servicio los arma)
       offerQuoteCreation,
-      linesToQuote
+      linesToQuote,
     };
 
+    // Heurística simple para sugerir recordatorios a PMs
     const questionLower = cleanQuestion.toLowerCase();
     const shouldSendReminder =
       questionLower.includes("pm") &&
@@ -78,15 +80,15 @@ export const handleSmartAsk = async (req: Request, res: Response) => {
       questionLower.includes("cotiz");
 
     if (shouldSendReminder) {
-      const pmEntities = entities.filter(e => e.type === 'PM' && e.email);
-      const reminderRecipients = pmEntities.map(e => ({
+      const pmEntities = (entities || []).filter((e: any) => e.type === "PM" && e.email);
+      const reminderRecipients = pmEntities.map((e: any) => ({
         name: e.name,
         email: e.email,
       }));
 
-      result.offerReminder = true;
+      result.offerReminder = reminderRecipients.length > 0;
       result.reminderRecipients = reminderRecipients;
-      result.rfqId = "664f19a02ab2235d3f91c44a"; // placeholder
+      result.rfqId = "664f19a02ab2235d3f91c44a"; // placeholder (reemplazar cuando tengas el id real)
     }
 
     return res.json(result);
@@ -135,22 +137,31 @@ export const createQuotesFromAgent = async (req: Request, res: Response) => {
   });
 
   // Filtrar líneas sin vendors
-  selectedLines = selectedLines.filter(line => (line.vendor_list ?? []).length > 0);
+  selectedLines = selectedLines.filter((line) => (line.vendor_list ?? []).length > 0);
 
   if (selectedLines.length === 0) {
     return res.status(400).json({
       success: false,
-      message: "No hay líneas válidas con vendors para crear cotizaciones."
+      message: "No hay líneas válidas con vendors para crear cotizaciones.",
     });
   }
 
   req.body.selectedLines = selectedLines;
-  return generateQuoteRequests(req, res);
+
+  try {
+    return await generateQuoteRequests(req, res);
+  } catch (err: any) {
+    console.error("❌ Error en generateQuoteRequests:", err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Error al generar cotizaciones.",
+    });
+  }
 };
 
-// ✅ Smart agent LECTURA o ESCRITURA
+// ✅ Smart agent LECTURA o ESCRITURA (slot-filling compatible)
 export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
-  const { question, confirm } = req.body;
+  const { question, confirm, conversationId, userProvided } = req.body;
 
   if (!question || typeof question !== "string" || question.trim() === "") {
     return res.status(400).json({ error: "Falta la pregunta válida." });
@@ -158,13 +169,21 @@ export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
 
   try {
     const cleanQuestion = question.trim();
-    const result = await getSmartAnswerWithWrite(cleanQuestion, confirm);
+    const result = await getSmartAnswerWithWrite(
+      cleanQuestion,
+      Boolean(confirm),
+      conversationId,
+      userProvided || {}
+    );
 
+    // 🔁 Propagamos nextAction y missingFields para el front transaccional
     return res.json({
       success: true,
       agent: "SmartAgent+Write",
       answer: result.answer,
       entities: result.entities || [],
+      nextAction: result.nextAction || "none",
+      missingFields: result.missingFields || [],
     });
   } catch (err: any) {
     console.error("❌ Error en /ask/smart-write:", err);
@@ -174,7 +193,7 @@ export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
   }
 };
 
-// src/controllers/askController.ts (o donde lo tengas)
+// Conversational (transactional) con conversationId
 export const handleSmartTransactional = async (req: Request, res: Response) => {
   console.log("[handleSmartTransactional] POST /ask/smart-transactional called");
   const { message, confirm, conversationId, userProvided } = req.body;
@@ -196,5 +215,3 @@ export const handleSmartTransactional = async (req: Request, res: Response) => {
     return res.status(500).json({ error: err.message || "Error interno del servidor." });
   }
 };
-
-

@@ -3,9 +3,6 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 
 import { executeDynamicWrite } from "./mongoWriteService";
-import { getMissingFieldsForCollection } from "../utils/getRequiredFields";
-
-
 import { getMongoCrudPlan, getNaturalAnswer } from "./openaiService";
 import { applyAliases, stripUnknownFields, normalize } from "./mongoShared";
 
@@ -33,10 +30,12 @@ import SchedulePurLine from "../models/SchedulePurLine";
 dotenv.config();
 
 /* =========================
-   Type guards para WriteOp
+   Tipos auxiliares
    ========================= */
-// Si ya exportás WriteOp desde openaiService, preferí importarlo:
-// import type { WriteOp } from "./openaiService";
+type Dict = Record<string, any>;
+
+/* Si ya exportás WriteOp desde openaiService, podés importarlo.
+   Lo dejamos local para no romper tu build. */
 type WriteOp =
   | {
       action: "insertOne" | "insertMany";
@@ -65,15 +64,12 @@ type WriteOp =
     }
   | { action: "none"; naturalSummary?: string; requiresConfirmation?: boolean };
 
-function isInsert(op: WriteOp): op is Extract<WriteOp, { action: "insertOne" | "insertMany" }> {
-  return op.action === "insertOne" || op.action === "insertMany";
-}
-function isUpdate(op: WriteOp): op is Extract<WriteOp, { action: "updateOne" | "updateMany" }> {
-  return op.action === "updateOne" || op.action === "updateMany";
-}
-function isDelete(op: WriteOp): op is Extract<WriteOp, { action: "deleteOne" | "deleteMany" }> {
-  return op.action === "deleteOne" || op.action === "deleteMany";
-}
+const isInsert = (op: WriteOp): op is Extract<WriteOp, { action: "insertOne" | "insertMany" }> =>
+  op.action === "insertOne" || op.action === "insertMany";
+const isUpdate = (op: WriteOp): op is Extract<WriteOp, { action: "updateOne" | "updateMany" }> =>
+  op.action === "updateOne" || op.action === "updateMany";
+const isDelete = (op: WriteOp): op is Extract<WriteOp, { action: "deleteOne" | "deleteMany" }> =>
+  op.action === "deleteOne" || op.action === "deleteMany";
 
 /* =========================
    Requisitos por colección
@@ -81,23 +77,20 @@ function isDelete(op: WriteOp): op is Extract<WriteOp, { action: "deleteOne" | "
 const REQUIRED_BY_COLLECTION: Record<string, string[]> = {
   vendor: ["name", "legal_id"], // ajustá según tu schema
   project: ["name"],
-  // ...
+  // agrega más colecciones si querés exigir campos en slot-filling
 };
 
-type Dict = Record<string, any>;
-
 function computeRequired(op: WriteOp): { requiredFields: string[]; baseFilled: Dict } {
-  const coll = normalize((op as any).collection || "");
-  const required = REQUIRED_BY_COLLECTION[coll] || [];
+  const collKey = normalize((op as any).collection || "");
+  const required = REQUIRED_BY_COLLECTION[collKey] || [];
   const baseFilled: Dict = {};
 
-  // si es insert y viene data base, precargamos los que ya estén completos
   if (isInsert(op) && op.data && !Array.isArray(op.data)) {
     for (const k of required) {
       if (op.data[k] != null && op.data[k] !== "") baseFilled[k] = op.data[k];
     }
   }
-  // si es update y trae update.$set, también podría prellenar (opcional)
+
   if (isUpdate(op) && op.update && typeof op.update === "object") {
     const possible = { ...(op.update.$set || {}), ...op.update };
     for (const k of required) {
@@ -108,6 +101,7 @@ function computeRequired(op: WriteOp): { requiredFields: string[]; baseFilled: D
   return { requiredFields: required, baseFilled };
 }
 
+/** Evita el error "Cannot find name 'hasAllFields'". */
 function hasAllFields(p: PendingWrite) {
   return p.missingFields.length === 0;
 }
@@ -127,9 +121,7 @@ export const getSmartAnswerWithWrite = async (
   missingFields?: string[];
 }> => {
   try {
-    console.log("📥 Pregunta recibida:", question);
-
-    // 0) Si hay op pendiente para esta conversación → intentamos completar y ejecutar
+    // 0) Si hay op pendiente para esta conversación → intentamos completar/ejecutar
     if (conversationId) {
       const pending = getPending(conversationId);
       if (pending) {
@@ -145,14 +137,15 @@ export const getSmartAnswerWithWrite = async (
           };
         }
 
-        // Ya tengo todo → pido confirm o ejecuto
         if (!confirm) {
           savePending(conversationId, merged);
           return {
             answer:
               `Tengo todo para **${merged.action}** en **${merged.collection}**.\n` +
               `Decime \`confirm=true\` para ejecutar.\n\n` +
-              "```json\n" + JSON.stringify(merged, null, 2) + "\n```",
+              "```json\n" +
+              JSON.stringify(merged, null, 2) +
+              "\n```",
             entities: [],
             nextAction: "execute",
           };
@@ -173,7 +166,6 @@ export const getSmartAnswerWithWrite = async (
 
     // 1) Planner CRUD
     const plan = await getMongoCrudPlan(question);
-    console.log("🧭 Plan:", JSON.stringify(plan, null, 2));
 
     // 2) Modo WRITE (create/update/delete)
     if (plan.mode === "write" && "operation" in plan) {
@@ -182,7 +174,6 @@ export const getSmartAnswerWithWrite = async (
       if (op.action === "none") {
         return { answer: "No veo una operación de escritura válida.", entities: [], nextAction: "none" };
       }
-
       if (!("collection" in op) || !(op as any).collection) {
         return { answer: "El plan no indica 'collection'.", entities: [], nextAction: "none" };
       }
@@ -198,14 +189,13 @@ export const getSmartAnswerWithWrite = async (
           };
         };
         (op as any).data = Array.isArray(op.data)
-          ? (op.data as any[]).map(assignId)
+          ? (op.data as Record<string, any>[]).map(assignId)
           : assignId(op.data as Record<string, any>);
       }
 
-      // Slot-filling: determinar campos requeridos por colección
+      // Slot-filling
       const { requiredFields, baseFilled } = computeRequired(op);
 
-      // Construir pending en base al tipo de acción
       const pending: PendingWrite = {
         action: op.action as PendingWrite["action"],
         collection: normalize((op as any).collection),
@@ -252,7 +242,9 @@ export const getSmartAnswerWithWrite = async (
           answer:
             `Tengo todo para **${pending.action}** en **${pending.collection}**.\n` +
             `Decime \`confirm=true\` para ejecutar.\n\n` +
-            "```json\n" + JSON.stringify(pending, null, 2) + "\n```",
+            "```json\n" +
+            JSON.stringify(pending, null, 2) +
+            "\n```",
           entities: [],
           nextAction: "execute",
         };
@@ -272,30 +264,32 @@ export const getSmartAnswerWithWrite = async (
 
     // 3) Modo READ (listar / consultar)
     if (plan.mode === "read" && "operation" in plan) {
-      // Tipado laxo porque el plan de lectura puede ser steps/aggregate/etc.
       const op: any = plan.operation;
       const { collection, filter = {}, projection = {}, sort = {}, limit = 50 } = op.list || {};
       const Model = (mongoose.models as Record<string, mongoose.Model<any>>)[collection];
       if (!Model) {
         return { answer: `No encuentro la colección ${collection} para listar.`, entities: [], nextAction: "none" };
       }
-      const rows = await Model.find(filter, projection).sort(sort).limit(limit).lean();
-      const natural = op.naturalSummary || "Resultado";
-      const answer = `${natural}:\n\n\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\``;
 
+      const rows = await Model.find(filter, projection).sort(sort).limit(limit).lean().exec();
+      const natural = op.naturalSummary || "Resultado";
+      const answer =
+        `${natural}:\n\n\`\`\`json\n${JSON.stringify(rows, null, 2)}\n\`\`\``;
+
+      // Entidades para UI
       const [vendors, projects, quotes, quoteLines, evals, evalLines, projectVendors, pms, projectPMs, schedules, scheduleLines] =
         await Promise.all([
-          Vendor.find().lean(),
-          Project.find().lean(),
-          QuoteRequest.find().lean(),
-          QuoteRequestLine.find().lean(),
-          Eval.find().lean(),
-          EvalLine.find().lean(),
-          ProjectVendor.find().lean(),
-          PM.find().lean(),
-          ProjectPM.find().lean(),
-          SchedulePur.find().lean(),
-          SchedulePurLine.find().lean(),
+          Vendor.find().lean().exec(),
+          Project.find().lean().exec(),
+          QuoteRequest.find().lean().exec(),
+          QuoteRequestLine.find().lean().exec(),
+          Eval.find().lean().exec(),
+          EvalLine.find().lean().exec(),
+          ProjectVendor.find().lean().exec(),
+          PM.find().lean().exec(),
+          ProjectPM.find().lean().exec(),
+          SchedulePur.find().lean().exec(),
+          SchedulePurLine.find().lean().exec(),
         ]);
 
       const entities = detectEntities(answer, {
@@ -315,20 +309,20 @@ export const getSmartAnswerWithWrite = async (
       return { answer, entities, nextAction: "none" };
     }
 
-    // 4) Fallback lectura natural con contexto
+    // 4) Fallback: lectura natural con contexto
     const [vendors, projects, quotes, quoteLines, evals, evalLines, projectVendors, pms, projectPMs, schedules, scheduleLines] =
       await Promise.all([
-        Vendor.find().lean(),
-        Project.find().lean(),
-        QuoteRequest.find().lean(),
-        QuoteRequestLine.find().lean(),
-        Eval.find().lean(),
-        EvalLine.find().lean(),
-        ProjectVendor.find().lean(),
-        PM.find().lean(),
-        ProjectPM.find().lean(),
-        SchedulePur.find().lean(),
-        SchedulePurLine.find().lean(),
+        Vendor.find().lean().exec(),
+        Project.find().lean().exec(),
+        QuoteRequest.find().lean().exec(),
+        QuoteRequestLine.find().lean().exec(),
+        Eval.find().lean().exec(),
+        EvalLine.find().lean().exec(),
+        ProjectVendor.find().lean().exec(),
+        PM.find().lean().exec(),
+        ProjectPM.find().lean().exec(),
+        SchedulePur.find().lean().exec(),
+        SchedulePurLine.find().lean().exec(),
       ]);
 
     const context = { vendors, projects, quotes, quoteLines, evals, evalLines, projectVendors, pms, projectPMs, schedules, scheduleLines };
@@ -359,10 +353,10 @@ export const getSmartAnswerWithWrite = async (
    Helpers
    ========================= */
 function inferFieldsFromQuestion(q: string): Dict {
-  // Heurística muy simple; podés mejorarla con un mini LLM si querés
+  // Heurística simple; mejorala si querés
   const mMail = q.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
-  const mLegal = q.match(/\b\d{2}-\d{3,}\b/); // ej. 20-123
-  const mName = q.match(/(?:proveedor|vendor|llamado|nombre)\s+([a-z0-9áéíóúüñ ._-]{2,})/i);
+  const mLegal = q.match(/\b\d{2}-\d{3,}\b/); // ej. 20-123...
+  const mName = q.match(/(?:proveedor|vendor|llamado|nombre|proyecto)\s+([a-z0-9áéíóúüñ ._-]{2,})/i);
   const out: Dict = {};
   if (mMail) out.main_mail = mMail[0];
   if (mLegal) out.legal_id = mLegal[0];
@@ -371,7 +365,6 @@ function inferFieldsFromQuestion(q: string): Dict {
 }
 
 function toWriteInput(op: PendingWrite) {
-  // Ajuste final de payloads según acción (y limpieza)
   const coll = normalize(op.collection);
   const patched: any = { ...op };
 
@@ -380,9 +373,7 @@ function toWriteInput(op: PendingWrite) {
       patched.data = stripUnknownFields(coll, applyAliases(coll, op.data));
     }
   }
-  if (op.action.startsWith("update")) {
-    // Si el filtro viene vacío, mongoWriteService pedirá confirm extra (guard-rail)
-  }
+  // Para updateMany/deleteMany sin filtro, mongoWriteService exige confirmación
   return patched;
 }
 
@@ -393,6 +384,7 @@ function detectEntities(
   const lower = answer.toLowerCase();
   const out: { type: string; name: string }[] = [];
   const seen = new Set<string>();
+
   const rules: Record<string, string[]> = {
     Vendor: ["name", "legal_id"],
     Project: ["name", "id"],
@@ -406,9 +398,10 @@ function detectEntities(
     SchedulePur: ["cc_id", "description"],
     SchedulePurLine: ["reference", "product_id"],
   };
+
   for (const [type, items] of Object.entries(collections)) {
     const fields = rules[type] || [];
-    (items as any[]).forEach((item: Record<string, any>) => {
+    (items as Record<string, any>[]).forEach((item) => {
       for (const field of fields) {
         const raw = item?.[field];
         const val = String(raw ?? "").trim();
@@ -423,5 +416,6 @@ function detectEntities(
       }
     });
   }
+
   return out;
 }

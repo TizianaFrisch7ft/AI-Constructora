@@ -23,6 +23,7 @@ import schedulePurRoutes from "./routes/schedulePurRoutes";
 import schedulePurLineRoutes from "./routes/schedulePurLineRoutes";
 import quoteRequestRoutes from "./routes/quoteRequest";
 import vendorRoutes from "./routes/vendorRoutes";
+import path from "path";
 dotenv.config();
 
 const app = express();
@@ -59,6 +60,7 @@ app.use("/api", agentRoutes);
 app.use("/api", quoteRequestRoutes);
 app.use("/api", vendorRoutes);
 app.use('/ask', agentRoutes);
+app.use("/downloads", express.static(path.join(process.cwd(), "storage")));
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
