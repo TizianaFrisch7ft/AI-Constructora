@@ -506,23 +506,17 @@ export const sendQuoteRequestsPdf = async (req: Request, res: Response) => {
     const outDir = path.join(process.cwd(), "storage", "qr-pdfs");
     await ensureDir(outDir);
 
-    const qrIdsFromSimple: string[] = Array.isArray(req.body?.qr_ids)
-      ? req.body.qr_ids
-      : [];
-
+    const qrIdsFromSimple: string[] = Array.isArray(req.body?.qr_ids) ? req.body.qr_ids : [];
     const qrIdsFromRequests: Array<{ qr_id: string; vendor_name?: string }> =
       Array.isArray(req.body?.requests) ? req.body.requests : [];
 
-    // Normalizo a items { qr_id, vendor_name? }
     const items: Array<{ qr_id: string; vendor_name?: string }> = [
       ...qrIdsFromSimple.map((qr_id) => ({ qr_id })),
       ...qrIdsFromRequests.map((r) => ({ qr_id: r.qr_id, vendor_name: r.vendor_name })),
     ];
 
     if (items.length === 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Body inválido. Enviá 'qr_ids' o 'requests'." });
+      return res.status(400).json({ success: false, message: "Body inválido. Enviá 'qr_ids' o 'requests'." });
     }
 
     const results: Array<{
@@ -546,11 +540,21 @@ export const sendQuoteRequestsPdf = async (req: Request, res: Response) => {
           continue;
         }
 
-        const lines = await QuoteRequestLine.find({ qr_id }).lean();
+        const allLines = await QuoteRequestLine.find({ qr_id }).lean();
+        // ✅ solo líneas waiting
+        const waitingLines = (allLines as any[]).filter(
+          (l) => String(l.status || "").trim().toLowerCase() === "waiting"
+        );
+
+        if (waitingLines.length === 0) {
+          entry.error = "Sin líneas en 'waiting' para enviar";
+          results.push(entry);
+          continue;
+        }
+
         const vendor_id = String((header as any).vendor_id || "");
         entry.vendor_id = vendor_id;
 
-        // Resolver vendor y mail
         const vendor = await Vendor.findOne({
           $or: [{ vendor_id }, { id: vendor_id }, { code: vendor_id }],
         }).lean();
@@ -566,23 +570,21 @@ export const sendQuoteRequestsPdf = async (req: Request, res: Response) => {
           results.push(entry);
           continue;
         }
-
         entry.vendor_email = vendorEmail;
 
-        // Armar payload PDF
+        // Armar payload SOLO con waiting
         const payload: QuoteForPDF = {
           qr_id,
           vendor_id,
           vendor_name: vendorNameFromClient || (vendor as any)?.name || undefined,
           date: header.date as any,
           reference: (header as any)?.reference || undefined,
-          lines: (lines as any[]).map((l) => ({
+          lines: waitingLines.map((l: any) => ({
             ...l,
             desired_date: l.desired_date ? new Date(l.desired_date) : null,
           })),
         };
 
-        // Construir PDF (buffer + guardar archivo)
         const { buffer, filename } = await buildQuotePdfBuffer(payload);
         const outPath = path.join(outDir, filename);
         await fs.promises.writeFile(outPath, buffer);
@@ -590,7 +592,6 @@ export const sendQuoteRequestsPdf = async (req: Request, res: Response) => {
         entry.file_name = filename;
         entry.file_path = `/downloads/qr-pdfs/${filename}`;
 
-        // Enviar mail con adjunto (SMTP intacto)
         await sendVendorEmailWithPdf({
           to: vendorEmail,
           vendorName: payload.vendor_name,
