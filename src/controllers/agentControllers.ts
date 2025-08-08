@@ -174,24 +174,27 @@ export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
   }
 };
 
+// src/controllers/askController.ts (o donde lo tengas)
 export const handleSmartTransactional = async (req: Request, res: Response) => {
   console.log("[handleSmartTransactional] POST /ask/smart-transactional called");
-  console.log("Body:", req.body);
-  const { message, context, confirm } = req.body;
+  const { message, confirm, conversationId, userProvided } = req.body;
 
   if (!message || typeof message !== "string" || message.trim() === "") {
-    console.warn("[handleSmartTransactional] Falta el mensaje válido");
     return res.status(400).json({ error: "Falta el mensaje válido." });
   }
 
   try {
-    const result = await getSmartAnswerWithWrite(message, confirm);
-    console.log("[handleSmartTransactional] Respuesta:", result);
+    const result = await getSmartAnswerWithWrite(
+      message.trim(),
+      Boolean(confirm),
+      conversationId,        // <-- clave para slot-filling
+      userProvided || {}     // <-- payload incremental
+    );
     return res.json(result);
   } catch (err: any) {
     console.error("❌ Error en /smart-transactional:", err);
-    return res.status(500).json({
-      error: err.message || "Error interno del servidor."
-    });
+    return res.status(500).json({ error: err.message || "Error interno del servidor." });
   }
 };
+
+

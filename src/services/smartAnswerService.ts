@@ -236,15 +236,49 @@ IMPORTANTE: Cuando hables de "líneas sin cotizar" solo menciona las que están 
     );
     const rfqId = rfq ? String((rfq as any)._id) : null;
 
-    return {
-      answer,
-      entities,
-      offerReminder,
-      reminderRecipients,
-      rfqId,
-      offerQuoteCreation,
-      linesToQuote,
-    };
+  // Normalizador + helpers
+const N = (s?: string) => (s ?? "").toString().trim().toUpperCase();
+const pick = (o: any, ...keys: string[]) => {
+  for (const k of keys) {
+    const v = (o as any)?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v);
+  }
+  return "";
+};
+
+const pickVendorId   = (v: any) => pick(v, "id", "vendor_id", "code", "_id");
+const pickVendorName = (v: any) => pick(v, "name", "razon_social", "companyName");
+const pickProjectId  = (p: any) => pick(p, "id", "project_id", "_id");
+const pickProjectName= (p: any) => pick(p, "name");
+
+// índices NAME -> ID desde la BD
+const vendorIdByName  = new Map(vendors.map(v => [N(pickVendorName(v)), pickVendorId(v)]));
+const projectIdByName = new Map(projects.map(p => [N(pickProjectName(p)), pickProjectId(p)]));
+
+// completar ids faltantes en entidades
+const entitiesWithIds = entities.map(e => {
+  if (e.type === "Vendor" && (!e.id || !e.id.trim())) {
+    const guess = vendorIdByName.get(N(e.name));
+    return { ...e, id: guess || e.id };
+  }
+  if (e.type === "Project" && (!e.id || !e.id.trim())) {
+    const guess = projectIdByName.get(N(e.name));
+    return { ...e, id: guess || e.id };
+  }
+  return e;
+});
+
+
+  return {
+  answer,
+  entities: entitiesWithIds, // <-- acá
+  offerReminder,
+  reminderRecipients,
+  rfqId,
+  offerQuoteCreation,
+  linesToQuote,
+};
+
   } catch (err: any) {
     console.error("❌ Error en getSmartAnswer:", err);
     throw new Error("Error generando la respuesta inteligente.");
@@ -252,6 +286,7 @@ IMPORTANTE: Cuando hables de "líneas sin cotizar" solo menciona las que están 
 };
 
 // Función de detección de entidades
+// Función de detección de entidades (reemplazar)
 function detectEntities(
   answer: string,
   collections: Record<string, any[]>
@@ -259,9 +294,11 @@ function detectEntities(
   const lower = answer.toLowerCase();
   const result: SmartEntity[] = [];
   const seen = new Set<string>();
+
+  // Campos que usamos para reconocer menciones en el texto
   const rules: Record<string, string[]> = {
-    Vendor: ["name", "legal_id"],
-    Project: ["name", "id", "project_id"],
+    Vendor: ["name", "legal_id", "vendor_id", "code", "vendorCode", "_id"],
+    Project: ["name", "project_id", "id", "_id"],
     QuoteRequest: ["qr_id", "reference"],
     QuoteRequestLine: ["reference", "product_id"],
     Eval: ["eval_id", "eval_name"],
@@ -273,31 +310,80 @@ function detectEntities(
     SchedulePurLine: ["reference", "product_id"],
   };
 
+  // Helpers para elegir el ID y el nombre “oficial” que vamos a devolver
+  const pickId = (type: string, item: any): string => {
+    if (type === "Vendor")
+      return String(item.vendor_id ?? item.code ?? item.vendorCode ?? item._id ?? "");
+    if (type === "Project")
+      return String(item.project_id ?? item.id ?? item._id ?? "");
+    if (type === "PM")
+      return String(item._id ?? "");
+    if (type === "QuoteRequest")
+      return String(item.qr_id ?? item._id ?? "");
+    if (type === "SchedulePur")
+      return String(item.cc_id ?? item._id ?? "");
+    if (type === "SchedulePurLine")
+      return String(item._id ?? "");
+    return String(item._id ?? "");
+  };
+
+  const pickName = (type: string, item: any): string => {
+    if (type === "Vendor")
+      return String(item.name ?? item.razon_social ?? item.companyName ?? "").trim();
+    if (type === "Project")
+      return String(item.name ?? "").trim();
+    return String(item.name ?? "").trim();
+  };
+
   for (const [type, items] of Object.entries(collections)) {
     const fields = rules[type] || [];
+
     for (const item of items) {
       for (const field of fields) {
         const raw = item?.[field];
-        const val = String(raw || "").trim();
-        if (val && val.length > 2 && lower.includes(val.toLowerCase())) {
-          const key = `${type}|${field}|${val}`;
+        const val = String(raw ?? "").trim();
+        if (!val || val.length <= 2) continue;
+
+        if (lower.includes(val.toLowerCase())) {
+          // clave: siempre devolvemos name + id “oficiales” del item
+          const entId = pickId(type, item);
+          const entName = pickName(type, item);
+
+          const key = `${type}|${entId}|${entName}`;
           if (seen.has(key)) break;
           seen.add(key);
 
           if (type === "Vendor") {
-            result.push({ type, name: item.name, rut: item.legal_id });
+            result.push({
+              type,
+              id: entId,
+              name: entName,
+              rut: item.legal_id ?? undefined,
+            });
           } else if (type === "PM") {
             result.push({
               type,
-              id: String(item._id),
-              name: `${item.name}${item.surname ? ` ${item.surname}` : ""}`,
+              id: entId,
+              name: `${item.name ?? ""}${item.surname ? ` ${item.surname}` : ""}`.trim(),
               surname: item.surname,
               email: item.email,
             });
+          } else if (type === "Project") {
+            result.push({
+              type,
+              id: entId,
+              name: entName,
+            });
           } else {
-            result.push({ type, name: val });
+            // resto: devolvemos al menos name + id si lo hay
+            result.push({
+              type,
+              id: entId || undefined,
+              name: entName || val,
+            });
           }
-          break;
+
+          break; // pasamos al siguiente item
         }
       }
     }
@@ -305,4 +391,4 @@ function detectEntities(
 
   return result;
 }
-      
+

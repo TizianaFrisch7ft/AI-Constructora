@@ -3,11 +3,12 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import dotenv from "dotenv";
 import { safeJSON } from "../utils/safeJSON"; // ajusta el path si es necesario
+import mongoose from "mongoose";
 
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-/* ---------- Tipos de plan de lectura/escritura ---------- */
+/* ---------- Tipos de plan de lectura/escritura (EXISTENTES) ---------- */
 export type FindStep = {
   mode: "find";
   collection: string;
@@ -51,6 +52,30 @@ export type WriteOp =
     }
   | { action: "none" };
 
+/* ---------- NUEVOS tipos para planner CRUD sin romper lo demás ---------- */
+export type CrudPlan =
+  | {
+      mode: "write";
+      operation: (WriteOp & {
+        requiresConfirmation?: boolean;
+        naturalSummary?: string;
+      });
+    }
+  | {
+      mode: "read";
+      operation: {
+        list: {
+          collection: string;
+          filter?: any;
+          projection?: any;
+          sort?: any;
+          limit?: number;
+        };
+        naturalSummary?: string;
+      };
+    }
+  | { mode: "none" };
+
 /* ---------- Helpers ---------- */
 const isComparisonRequest = (question: string): boolean => {
   const lower = question.toLowerCase();
@@ -64,6 +89,25 @@ const isComparisonRequest = (question: string): boolean => {
     lower.includes("versus")
   );
 };
+
+/** META real desde Mongoose (colecciones, campos y alias) */
+function getModelMeta(): Record<string, { fields: string[]; aliases: Record<string, string> }> {
+  const meta: Record<string, { fields: string[]; aliases: Record<string, string> }> = {};
+  for (const [name, model] of Object.entries(mongoose.models)) {
+   
+    const schema = (model as any).schema as mongoose.Schema;
+    const paths = Object.keys(schema?.paths || {});
+    const aliases: Record<string, string> = {};
+
+    Object.values(schema?.paths || {}).forEach((p: any) => {
+      if (p?.options?.alias && typeof p.path === "string") {
+        aliases[p.options.alias as string] = p.path as string;
+      }
+    });
+    meta[name] = { fields: paths, aliases };
+  }
+  return meta;
+}
 
 /* ---------- Prompts ---------- */
 const comparisonPrompt = `
@@ -128,7 +172,7 @@ Consulta del usuario:
 "${question}"
 `;
 
-/* ---------- Funciones ---------- */
+/* ---------- Funciones EXISTENTES (no se tocan) ---------- */
 export const getMongoQuery = async (question: string): Promise<ReadPlan> => {
   const resp = await openai.chat.completions.create({
     model: "gpt-3.5-turbo",
@@ -155,20 +199,20 @@ export const getNaturalAnswer = async (
 ): Promise<string> => {
   const cmp = isComparisonRequest(question);
 
- const messages: ChatCompletionMessageParam[] = cmp
-  ? [
-      { role: "system", content: comparisonPrompt },
-      {
-        role: "user",
-        content: `Datos JSON:\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``,
-      },
-    ]
-  : [
-      {
-        role: "system",
-        content: NATURAL_PROMPT(question, data),
-      },
-    ];
+  const messages: ChatCompletionMessageParam[] = cmp
+    ? [
+        { role: "system", content: comparisonPrompt },
+        {
+          role: "user",
+          content: `Datos JSON:\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``,
+        },
+      ]
+    : [
+        {
+          role: "system",
+          content: NATURAL_PROMPT(question, data),
+        },
+      ];
   const resp = await openai.chat.completions.create({
     model: "gpt-4o",
     temperature: 0,
@@ -177,3 +221,87 @@ export const getNaturalAnswer = async (
 
   return resp.choices[0].message.content?.trim() || "No se pudo generar una respuesta.";
 };
+
+/* ---------- NUEVO planner CRUD que NO rompe lo anterior ---------- */
+export async function getMongoCrudPlan(question: string): Promise<CrudPlan> {
+  const meta = getModelMeta();
+  const collections = Object.keys(meta);
+
+  const system = `
+Sos un planner de operaciones CRUD para MongoDB. Respondés SOLO JSON válido.
+Usá EXCLUSIVAMENTE colecciones y campos provistos en "meta".
+Salidas permitidas:
+
+1) Escritura:
+{
+  "mode": "write",
+  "operation": {
+    "action": "insertOne"|"insertMany"|"updateOne"|"updateMany"|"deleteOne"|"deleteMany",
+    "collection": "<ExactName>",
+    "data": object | object[]?,
+    "filter": object?,
+    "update": object?,
+    "options": object?,
+    "requiresConfirmation": boolean?,
+    "naturalSummary": "texto breve"
+  }
+}
+
+2) Lectura/listar:
+{
+  "mode": "read",
+  "operation": {
+    "list": {
+      "collection": "<ExactName>",
+      "filter": object?,
+      "projection": object?,
+      "sort": object?,
+      "limit": number?
+    },
+    "naturalSummary": "texto breve"
+  }
+}
+
+3) Ninguna:
+{ "mode": "none" }
+
+Reglas:
+- "collection" debe estar en meta.
+- Campos en data/filter/update solo de meta[collection].fields o alias meta[collection].aliases.
+- Si es riesgoso (deleteMany/updateMany sin filtro claro) setea "requiresConfirmation": true.
+- Si no hay info suficiente, devolvé {"mode":"none"}.
+`;
+
+  const user = `
+meta: ${JSON.stringify(meta, null, 2)}
+
+instrucción: ${question}
+
+Devolvé SOLO un JSON válido como se especifica (sin comentarios ni backticks).
+`;
+
+  const resp = await openai.chat.completions.create({
+    model: "gpt-4o",
+    temperature: 0,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+
+  const raw = resp.choices?.[0]?.message?.content?.trim() || `{"mode":"none"}`;
+  let plan: CrudPlan;
+  try {
+    plan = JSON.parse(raw) as CrudPlan;
+  } catch {
+    return { mode: "none" };
+  }
+
+  const op: any = (plan as any).operation;
+  const coll: string | undefined = op?.collection || op?.list?.collection;
+  if (plan.mode !== "none" && coll && !collections.includes(coll)) {
+    return { mode: "none" };
+  }
+
+  return plan;
+}
