@@ -152,7 +152,36 @@ export const createQuotesFromAgent = async (req: Request, res: Response) => {
   req.body.selectedLines = selectedLines;
 
   try {
-    return await generateQuoteRequests(req, res);
+    // Fake response para capturar el resultado de generateQuoteRequests
+    let resultData: any = null;
+    const fakeRes = {
+      status: (code: number) => fakeRes, // ignoramos el status, lo maneja abajo
+      json: (data: any) => {
+        resultData = data;
+        return data;
+      },
+    };
+
+    await generateQuoteRequests(req, fakeRes as any);
+
+    if (!resultData || resultData.success === false) {
+      return res.status(resultData?.statusCode || 500).json({
+        success: false,
+        message: resultData?.message || "Error al generar cotizaciones.",
+      });
+    }
+
+    const quoteIds = Array.isArray(resultData.result)
+      ? resultData.result.map((q: any) => q.qr_id)
+      : [];
+
+    return res.status(201).json({
+      success: true,
+      message: resultData.message,
+      quoteIds,
+      offerSendQuotes: quoteIds.length > 0,
+      // El frontend puede mostrar checkboxes con estos IDs y un botón para enviar
+    });
   } catch (err: any) {
     console.error("❌ Error en generateQuoteRequests:", err);
     return res.status(500).json({

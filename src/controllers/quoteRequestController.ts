@@ -1,4 +1,5 @@
-// src/controllers/quoteRequestController.ts
+
+
 import { Request, Response } from "express";
 import QuoteRequest from "../models/QuoteRequest";
 import QuoteRequestLine from "../models/QuoteRequestLine";
@@ -725,5 +726,109 @@ export const deleteQuoteRequestLine = async (req: Request, res: Response) => {
     console.error("📌 Mensaje:", error?.message);
     console.error("📌 Stack:", error?.stack);
     res.status(500).json({ message: "Error interno al eliminar la línea." });
+  }
+};
+
+/* =========================
+   SOLO GENERAR PDF (NO enviar email)
+   ========================= */
+export const generateQuoteRequestsPdf = async (req: Request, res: Response) => {
+  try {
+    const outDir = path.join(process.cwd(), "storage", "qr-pdfs");
+    await ensureDir(outDir);
+    const qrIds: string[] = Array.isArray(req.body?.qr_ids) ? req.body.qr_ids : [];
+    if (qrIds.length === 0) {
+      return res.status(400).json({ success: false, message: "Body inválido. Enviá 'qr_ids'." });
+    }
+    const results: Array<{
+      qr_id: string;
+      vendor_id?: string;
+      vendor_email?: string;
+      file_name?: string;
+      file_path?: string;
+      error?: string;
+    }> = [];
+    for (const qr_id of qrIds) {
+      const entry: any = { qr_id };
+      try {
+        const header = await QuoteRequest.findOne({ qr_id }).lean();
+        if (!header) {
+          entry.error = "RFQ no encontrada";
+          results.push(entry);
+          continue;
+        }
+        const allLines = await QuoteRequestLine.find({ qr_id }).lean();
+        const waitingLines = (allLines as any[]).filter(
+          (l) => String(l.status || "").trim().toLowerCase() === "waiting"
+        );
+        if (waitingLines.length === 0) {
+          entry.error = "Sin líneas en 'waiting' para PDF";
+          results.push(entry);
+          continue;
+        }
+        const vendor_id = String((header as any).vendor_id || "");
+        entry.vendor_id = vendor_id;
+        const vendor = await Vendor.findOne({
+          $or: [{ vendor_id }, { id: vendor_id }, { code: vendor_id }],
+        }).lean();
+        const vendorEmail =
+          (vendor as any)?.main_mail || (vendor as any)?.email || (vendor as any)?.mail || "";
+        entry.vendor_email = vendorEmail;
+        const payload: QuoteForPDF = {
+          qr_id,
+          vendor_id,
+          vendor_name: (vendor as any)?.name || undefined,
+          date: header.date as any,
+          reference: (header as any)?.reference || undefined,
+          lines: waitingLines.map((l: any) => ({
+            ...l,
+            desired_date: l.desired_date ? new Date(l.desired_date) : null,
+          })),
+        };
+        const { buffer, filename } = await buildQuotePdfBuffer(payload);
+        const outPath = path.join(outDir, filename);
+        await fs.promises.writeFile(outPath, buffer);
+        entry.file_name = filename;
+        entry.file_path = `/downloads/qr-pdfs/${filename}`;
+        results.push(entry);
+      } catch (e: any) {
+        entry.error = e?.message || "Error inesperado";
+        results.push(entry);
+      }
+    }
+    return res.json({ success: true, results });
+  } catch (err: any) {
+    console.error("❌ Error generando PDFs:", err);
+    return res.status(500).json({ success: false, message: "Error generando PDFs.", detalle: err?.message });
+  }
+};
+
+/* =========================
+   ENVIAR PDF POR EMAIL (ya generado)
+   ========================= */
+export const sendQuoteRequestPdfEmail = async (req: Request, res: Response) => {
+  try {
+    const { qr_id, email } = req.body || {};
+    if (!qr_id || !email) {
+      return res.status(400).json({ success: false, message: "Faltan qr_id o email." });
+    }
+    const outDir = path.join(process.cwd(), "storage", "qr-pdfs");
+    const filename = `${qr_id}.pdf`;
+    const filePath = path.join(outDir, filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: "PDF no encontrado. Genera primero el PDF." });
+    }
+    const pdfBuffer = await fs.promises.readFile(filePath);
+    await sendVendorEmailWithPdf({
+      to: email,
+      vendorName: undefined,
+      qrId: qr_id,
+      pdfBuffer,
+      filename,
+    });
+    return res.json({ success: true, message: `PDF enviado a ${email}` });
+  } catch (err: any) {
+    console.error("❌ Error enviando PDF por email:", err);
+    return res.status(500).json({ success: false, message: "Error enviando PDF por email.", detalle: err?.message });
   }
 };
