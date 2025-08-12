@@ -13,6 +13,7 @@ import PM from "../models/PM";
 import ProjectPM from "../models/ProjectPM";
 import SchedulePur from "../models/SchedulePur";
 import SchedulePurLine from "../models/SchedulePurLine";
+import { isComparisonRequest } from "../services/openaiService"; // importa lo que ya tenés
 
 dotenv.config();
 
@@ -135,10 +136,16 @@ export const getSmartAnswer = async (
 
     const systemPrompt = `Sos un experto en gestión de compras y proyectos. Tenés acceso a los datos internos en JSON. Contestá en español, con precisión, sin inventar nada.`;
     
-    let userPrompt = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
+  let userPrompt = `Datos: ${JSON.stringify(context)}\n\nPregunta: ${question}`;
+  // Solo agregar advertencia si la pregunta es de comparación
+  const comparisonRegex = /compar(a|ar|ación|aciones|ativo|ativos|ativa|ativas)|diferenc(i|ia|ias|iar|iaste|iamos)|mejor|peor|más barato|más caro|ranking|cuál es el mejor|cuál es el peor|cuál es más barato|cuál es más caro|ventaja|desventaja|superior|inferior/i;
+  const priceWarning = "IMPORTANTE: Cuando compares precios de productos (líneas de cotización), si detectás que uno es MUCHO más bajo que los demás, advierte al usuario que ese precio NO es fiable. Usa un emoji de alerta (por ejemplo: ⚠️) en la advertencia.";
+  if (comparisonRegex.test(question)) {
+    userPrompt += `\n\n${priceWarning}`;
+  }
     
     if (linesToQuote.length > 0) {
-      userPrompt = `
+  userPrompt = `
 Datos: ${JSON.stringify(context)}
 
 Líneas sin cotizar detectadas (para que las menciones exactamente como están):
@@ -148,6 +155,10 @@ Pregunta: ${question}
 
 IMPORTANTE: Cuando hables de "líneas sin cotizar" solo menciona las que están en la lista anterior.
 `;
+  // Solo agregar advertencia si la pregunta es de comparación
+  if (comparisonRegex.test(question)) {
+    userPrompt += `\n\n${priceWarning}`;
+  }
     }
 
     const chat = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY })

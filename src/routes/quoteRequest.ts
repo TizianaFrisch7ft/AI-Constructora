@@ -8,8 +8,7 @@ import {
   deleteQuoteRequestLine,
   sendQuoteRequestsPdf, // 👈 nuevo
 } from "../controllers/quoteRequestController";
-import { agentTransactional } from "../controllers/agentTransactionalController";
-// import { handleSmartTransactional } from "../controllers/agentControllers";
+
 
 const router = express.Router();
 
@@ -31,8 +30,7 @@ router.post("/generate", generateQuoteRequests);                  // (legacy) ma
 router.get("/quote-request", getAllQuoteRequests);
 router.get("/quote-request/:qr_id/lines", getQuoteLinesById);
 
-// --- Agente transaccional ---
-router.post("/agent-transactional", agentTransactional);
+
 // router.post("/smart-transactional", handleSmartTransactional);
 
 export default router;

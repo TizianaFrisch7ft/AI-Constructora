@@ -3,8 +3,10 @@ import { Request, Response } from "express";
 import { getMongoQuery, getNaturalAnswer } from "../services/openaiService";
 import { executeDynamicQuery } from "../services/mongoReadService";
 import { getSmartAnswer } from "../services/smartAnswerService";
-import { getSmartAnswerWithWrite } from "../services/getSmartAnswerSmartWrite";
+
 import { generateQuoteRequests } from "./quoteRequestController";
+
+
 
 /** Verifica si hay datos reales en la respuesta (por si querés usarlo en el futuro) */
 const hasData = (d: any): boolean => {
@@ -13,6 +15,7 @@ const hasData = (d: any): boolean => {
   return !!d;
 };
 
+// ✅ Mantener: SOLO lectura clásica
 export const handleAsk = async (req: Request, res: Response) => {
   const { question } = req.body;
 
@@ -47,7 +50,7 @@ export const handleAsk = async (req: Request, res: Response) => {
   }
 };
 
-// ✅ Smart agent SOLO lectura
+// ✅ Smart agent SOLO lectura (lo dejo igual)
 export const handleSmartAsk = async (req: Request, res: Response) => {
   const { question } = req.body;
 
@@ -88,7 +91,7 @@ export const handleSmartAsk = async (req: Request, res: Response) => {
 
       result.offerReminder = reminderRecipients.length > 0;
       result.reminderRecipients = reminderRecipients;
-      result.rfqId = "664f19a02ab2235d3f91c44a"; // placeholder (reemplazar cuando tengas el id real)
+      result.rfqId = "664f19a02ab2235d3f91c44a"; // placeholder
     }
 
     return res.json(result);
@@ -159,59 +162,8 @@ export const createQuotesFromAgent = async (req: Request, res: Response) => {
   }
 };
 
-// ✅ Smart agent LECTURA o ESCRITURA (slot-filling compatible)
-export const handleSmartAskWithWrite = async (req: Request, res: Response) => {
-  const { question, confirm, conversationId, userProvided } = req.body;
 
-  if (!question || typeof question !== "string" || question.trim() === "") {
-    return res.status(400).json({ error: "Falta la pregunta válida." });
-  }
 
-  try {
-    const cleanQuestion = question.trim();
-    const result = await getSmartAnswerWithWrite(
-      cleanQuestion,
-      Boolean(confirm),
-      conversationId,
-      userProvided || {}
-    );
 
-    // 🔁 Propagamos nextAction y missingFields para el front transaccional
-    return res.json({
-      success: true,
-      agent: "SmartAgent+Write",
-      answer: result.answer,
-      entities: result.entities || [],
-      nextAction: result.nextAction || "none",
-      missingFields: result.missingFields || [],
-    });
-  } catch (err: any) {
-    console.error("❌ Error en /ask/smart-write:", err);
-    return res.status(500).json({
-      error: err.message || "Error interno del servidor.",
-    });
-  }
-};
 
-// Conversational (transactional) con conversationId
-export const handleSmartTransactional = async (req: Request, res: Response) => {
-  console.log("[handleSmartTransactional] POST /ask/smart-transactional called");
-  const { message, confirm, conversationId, userProvided } = req.body;
 
-  if (!message || typeof message !== "string" || message.trim() === "") {
-    return res.status(400).json({ error: "Falta el mensaje válido." });
-  }
-
-  try {
-    const result = await getSmartAnswerWithWrite(
-      message.trim(),
-      Boolean(confirm),
-      conversationId,        // <-- clave para slot-filling
-      userProvided || {}     // <-- payload incremental
-    );
-    return res.json(result);
-  } catch (err: any) {
-    console.error("❌ Error en /smart-transactional:", err);
-    return res.status(500).json({ error: err.message || "Error interno del servidor." });
-  }
-};
